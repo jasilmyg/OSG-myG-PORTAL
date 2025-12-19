@@ -11,3 +11,4 @@ cache.pkl
 *.db
 site.db
 instance/
+uploads/
