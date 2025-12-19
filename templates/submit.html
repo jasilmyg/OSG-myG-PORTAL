@@ -15,20 +15,70 @@
 
         <!-- Step 1: Search -->
         <div class="verification-section">
-            <h3 style="margin-bottom: 1.5rem; color: var(--text-secondary); font-weight: 600;">Find Customer</h3>
-            <div class="input-group" style="margin-bottom: 1rem;">
-                <div class="search-box" style="width: 100%; padding: 0.8rem 1rem;">
-                    <i class="ri-phone-line" style="font-size: 1.2rem; color: var(--primary);"></i>
-                    <input type="text" id="mobileInput" placeholder="Enter 10-digit Mobile Number" maxlength="10"
-                        style="font-size: 1.1rem; font-weight: 500;">
+            <h3
+                style="margin-bottom: 2rem; color: var(--text-main); font-weight: 700; font-size: 1.5rem; letter-spacing: -0.025em;">
+                Find Customer</h3>
+
+            <div class="search-card"
+                style="background: white; border-radius: 16px; padding: 2rem; box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.05); border: 1px solid rgba(229, 231, 235, 0.5);">
+                <label
+                    style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;">Customer
+                    Search</label>
+
+                <div class="input-group" style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                    <div class="search-box-premium" style="flex: 1; position: relative;">
+                        <i class="ri-smartphone-line"
+                            style="position: absolute; left: 1.25rem; top: 50%; transform: translateY(-50%); font-size: 1.4rem; color: var(--primary);"></i>
+                        <input type="text" id="mobileInput" placeholder="Enter 10-digit Mobile Number" maxlength="10"
+                            style="width: 100%; padding: 1.25rem 1.25rem 1.25rem 3.5rem; font-size: 1.1rem; border: 2px solid #f3f4f6; border-radius: 12px; transition: all 0.3s ease; background: #f9fafb; font-weight: 500; letter-spacing: 0.5px;">
+                    </div>
+
+                    <button class="btn-primary-gradient" onclick="searchCustomer()" id="searchBtn"
+                        style="padding: 0 2.5rem; border-radius: 12px; font-weight: 600; font-size: 1.1rem; border: none; cursor: pointer; color: white; background: var(--primary-gradient); box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3); transition: all 0.3s ease; display: flex; align-items: center; gap: 0.5rem; min-height: 3.5rem;">
+                        <i class="ri-search-2-line" style="font-size: 1.25rem;"></i> Search
+                    </button>
                 </div>
-                <button class="btn-primary" onclick="searchCustomer()" id="searchBtn">
-                    <i class="ri-search-2-line"></i> Search
-                </button>
+
+                <p
+                    style="margin-top: 1rem; font-size: 0.9rem; color: var(--text-tertiary); display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="ri-information-line"></i> Verify customer details before registering a claim.
+                </p>
+
+                <div id="search-msg" class="msg-box hidden"
+                    style="margin-top: 1rem; padding: 1rem; border-radius: 8px; font-size: 0.95rem; display: flex; align-items: center; gap: 0.5rem; animation: slideDown 0.3s ease;">
+                </div>
             </div>
-            <div id="search-msg" class="msg-box hidden"
-                style="margin-top: 1rem; color: var(--danger); font-size: 0.9rem;"></div>
         </div>
+
+        <style>
+            .search-box-premium input:focus {
+                border-color: var(--primary);
+                background: white;
+                box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+                outline: none;
+            }
+
+            .btn-primary-gradient:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 8px 16px rgba(59, 130, 246, 0.4);
+            }
+
+            .btn-primary-gradient:active {
+                transform: translateY(0);
+            }
+
+            @keyframes slideDown {
+                from {
+                    opacity: 0;
+                    transform: translateY(-10px);
+                }
+
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+        </style>
 
         <!-- Step 2: Customer & Product (Hidden initially) -->
         <div id="claim-form-section" class="hidden fade-in"
