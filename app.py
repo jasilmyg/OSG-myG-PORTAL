@@ -12,6 +12,15 @@ from email.mime.application import MIMEApplication
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
+import io
+import re
+from collections import defaultdict
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils.dataframe import dataframe_to_rows
+from openpyxl.utils import get_column_letter
+from flask import send_file
+import xlsxwriter
 
 # ----------------------
 # CONFIG
@@ -848,5 +857,860 @@ def get_analytics_data():
         })
 
 
+
+# ----------------------
+# REPORTS & TOOLS ROUTES
+# ----------------------
+@app.route('/reports')
+@login_required
+def reports_tools():
+    today = datetime.datetime.now().strftime('%Y-%m-%d')
+    month_start = datetime.datetime.now().replace(day=1).strftime('%Y-%m-%d')
+    return render_template('reports_tools.html', today=today, month_start=month_start)
+
+@app.route('/reports/generate_1', methods=['POST'])
+@login_required
+def generate_report_1():
+    try:
+        report_date_str = request.form.get('report_date')
+        prev_date_str = request.form.get('prev_date')
+        
+        curr_sales_file = request.files.get('curr_sales')
+        prev_sales_file = request.files.get('prev_sales')
+        product_sales_file = request.files.get('product_sales') # Product Sales
+
+        if not curr_sales_file or not product_sales_file or not prev_sales_file:
+            flash("All files (Current Sales, Previous Sales, Product Sales) are required.", "error")
+            return redirect(url_for('reports_tools'))
+
+        # Load Defaults (Assumed to be in BASE_DIR)
+        store_list_path = os.path.join(BASE_DIR, "myG All Store.xlsx")
+        rbm_path = os.path.join(BASE_DIR, "RBM,BDM,BRANCH.xlsx")
+        
+        if not os.path.exists(store_list_path) or not os.path.exists(rbm_path):
+            flash("Default Store/RBM files not found on server.", "error")
+            return redirect(url_for('reports_tools'))
+
+        future_store_df = pd.read_excel(store_list_path)
+        rbm_df = pd.read_excel(rbm_path)
+
+        # Process logic from snippet
+        # Optimization: Read only needed columns
+        # Needed: Branch (->Store), DATE, QUANTITY, AMOUNT
+        try:
+             book1_df = pd.read_excel(curr_sales_file, usecols=lambda x: x in ['Branch', 'Store', 'DATE', 'Date', 'QUANTITY', 'AMOUNT'])
+        except Exception:
+             # Fallback if specific columns not found (e.g. typos in headers)
+             book1_df = pd.read_excel(curr_sales_file)
+
+        book1_df.rename(columns={'Branch': 'Store', 'Date': 'DATE'}, inplace=True)
+        book1_df['DATE'] = pd.to_datetime(book1_df['DATE'], dayfirst=True, errors='coerce')
+        book1_df = book1_df.dropna(subset=['DATE'])
+        rbm_df.rename(columns={'Branch': 'Store'}, inplace=True)
+
+        try:
+            product_df = pd.read_excel(product_sales_file, usecols=lambda x: x in ['Branch', 'Store', 'Date', 'DATE', 'Sold Price', 'AMOUNT', 'QUANTITY'])
+        except:
+            product_df = pd.read_excel(product_sales_file)
+            
+        product_df.rename(columns={'Branch': 'Store', 'Date': 'DATE', 'Sold Price': 'AMOUNT'}, inplace=True)
+        product_df['DATE'] = pd.to_datetime(product_df['DATE'], dayfirst=True, errors='coerce')
+        product_df = product_df.dropna(subset=['DATE'])
+        if 'QUANTITY' not in product_df.columns:
+            product_df['QUANTITY'] = 1
+
+        today = pd.to_datetime(report_date_str)
+        mtd_df = book1_df[book1_df['DATE'].dt.month == today.month]
+        today_df = mtd_df[mtd_df['DATE'].dt.date == today.date()]
+        
+        today_agg = today_df.groupby('Store', as_index=False).agg({'QUANTITY': 'sum', 'AMOUNT': 'sum'}).rename(columns={'QUANTITY': 'FTD Count', 'AMOUNT': 'FTD Value'})
+        mtd_agg = mtd_df.groupby('Store', as_index=False).agg({'QUANTITY': 'sum', 'AMOUNT': 'sum'}).rename(columns={'QUANTITY': 'MTD Count', 'AMOUNT': 'MTD Value'})
+
+        product_mtd_df = product_df[product_df['DATE'].dt.month == today.month]
+        product_today_df = product_mtd_df[product_mtd_df['DATE'].dt.date == today.date()]
+        product_today_agg = product_today_df.groupby('Store', as_index=False).agg({'QUANTITY': 'sum', 'AMOUNT': 'sum'}).rename(columns={'QUANTITY': 'Product_FTD_Count', 'AMOUNT': 'Product_FTD_Amount'})
+        product_mtd_agg = product_mtd_df.groupby('Store', as_index=False).agg({'QUANTITY': 'sum', 'AMOUNT': 'sum'}).rename(columns={'QUANTITY': 'Product_MTD_Count', 'AMOUNT': 'Product_MTD_Amount'})
+
+        try:
+            # Needed: Branch, DATE, AMOUNT
+            prev_df = pd.read_excel(prev_sales_file, usecols=lambda x: x in ['Branch', 'Store', 'DATE', 'Date', 'AMOUNT'])
+        except:
+             prev_df = pd.read_excel(prev_sales_file)
+
+        prev_df.rename(columns={'Branch': 'Store', 'Date': 'DATE'}, inplace=True)
+        prev_df['DATE'] = pd.to_datetime(prev_df['DATE'], dayfirst=True, errors='coerce')
+        prev_df = prev_df.dropna(subset=['DATE'])
+        prev_month = pd.to_datetime(prev_date_str)
+        prev_mtd_df = prev_df[prev_df['DATE'].dt.month == prev_month.month]
+        prev_mtd_agg = prev_mtd_df.groupby('Store', as_index=False).agg({'AMOUNT': 'sum'}).rename(columns={'AMOUNT': 'PREV MONTH SALE'})
+
+        all_stores = pd.DataFrame(pd.Series(pd.concat([future_store_df['Store'], book1_df['Store'], product_df['Store']]).unique(), name='Store'))
+        report_df = all_stores.merge(today_agg, on='Store', how='left') \
+                                .merge(mtd_agg, on='Store', how='left') \
+                                .merge(product_today_agg, on='Store', how='left') \
+                                .merge(product_mtd_agg, on='Store', how='left') \
+                                .merge(prev_mtd_agg, on='Store', how='left') \
+                                .merge(rbm_df[['Store', 'RBM']], on='Store', how='left')
+
+        required_columns = ['Store', 'FTD Count', 'FTD Value', 'Product_FTD_Amount', 'MTD Count', 'MTD Value', 'Product_MTD_Amount', 'PREV MONTH SALE', 'RBM']
+        for col in required_columns:
+            if col not in report_df.columns:
+                report_df[col] = 0
+        report_df = report_df.rename(columns={'Store': 'Store Name'})
+
+        cols_to_fill = ['FTD Count', 'FTD Value', 'MTD Count', 'MTD Value', 'Product_FTD_Count', 'Product_FTD_Amount', 'Product_MTD_Count', 'Product_MTD_Amount', 'PREV MONTH SALE']
+        # Only fill available columns
+        available_fill = [c for c in cols_to_fill if c in report_df.columns]
+        report_df[available_fill] = report_df[available_fill].fillna(0).astype(int)
+
+        report_df['DIFF %'] = report_df.apply(
+            lambda x: round(((x['MTD Value'] - x['PREV MONTH SALE']) / x['PREV MONTH SALE']) * 100, 2) if x['PREV MONTH SALE'] != 0 else 0,
+            axis=1
+        )
+        report_df['ASP'] = report_df.apply(
+            lambda x: round(x['MTD Value'] / x['MTD Count'], 2) if x['MTD Count'] != 0 else 0,
+            axis=1
+        )
+        report_df['FTD Value Conversion'] = report_df.apply(
+            lambda x: round((x['FTD Value'] / x['Product_FTD_Amount']) * 100, 2) if x['Product_FTD_Amount'] != 0 else 0,
+            axis=1
+        )
+        report_df['MTD Value Conversion'] = report_df.apply(
+            lambda x: round((x['MTD Value'] / x['Product_MTD_Amount']) * 100, 2) if x['Product_MTD_Amount'] != 0 else 0,
+            axis=1
+        )
+
+        # Excel Generation with Complete Streamlit Formatting
+        excel_output = io.BytesIO()
+        with pd.ExcelWriter(excel_output, engine='xlsxwriter') as writer:
+            workbook = writer.book
+
+            colors_palette = {
+                'primary_blue': '#1E3A8A',
+                'light_blue': '#DBEAFE',
+                'success_green': '#065F46',
+                'light_green': '#D1FAE5',
+                'warning_orange': '#EA580C',
+                'light_orange': '#FED7AA',
+                'danger_red': '#DC2626',
+                'light_red': '#FEE2E2',
+                'accent_purple': '#7C3AED',
+                'light_purple': '#EDE9FE',
+                'neutral_gray': '#6B7280',
+                'light_gray': '#F9FAFB',
+                'white': '#FFFFFF',
+                'dark_blue': '#0F172A',
+                'mint_green': '#10B981',
+                'light_mint': '#ECFDF5',
+                'royal_blue': '#3B82F6',
+                'light_royal': '#EBF8FF'
+            }
+
+            formats = {
+                'title': workbook.add_format({
+                    'bold': True, 'font_size': 16, 'font_color': colors_palette['primary_blue'],
+                    'align': 'center', 'valign': 'vcenter', 'bg_color': colors_palette['white'],
+                    'border': 1, 'border_color': colors_palette['primary_blue']
+                }),
+                'subtitle': workbook.add_format({
+                    'bold': True, 'font_size': 12, 'font_color': colors_palette['neutral_gray'],
+                    'align': 'center', 'valign': 'vcenter', 'italic': True
+                }),
+                'header_main': workbook.add_format({
+                    'bold': True, 'font_size': 11, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['primary_blue'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['primary_blue'], 'text_wrap': True
+                }),
+                'header_secondary': workbook.add_format({
+                    'bold': True, 'font_size': 10, 'font_color': colors_palette['primary_blue'],
+                    'bg_color': colors_palette['light_blue'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['primary_blue']
+                }),
+                'data_normal': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['white']
+                }),
+                'data_alternate': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_gray']
+                }),
+                'data_store_name': workbook.add_format({
+                    'font_size': 10, 'bold': True, 'align': 'left', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['white'], 'indent': 1
+                }),
+                'data_store_name_alt': workbook.add_format({
+                    'font_size': 10, 'bold': True, 'align': 'left', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_gray'], 'indent': 1
+                }),
+                'conversion_low': workbook.add_format({
+                    'font_size': 10, 'font_color': colors_palette['danger_red'], 'bg_color': colors_palette['light_red'],
+                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['danger_red'], 'num_format': '0.00%', 'bold': True
+                }),
+                'conversion_green': workbook.add_format({
+                    'bold': True, 'font_size': 10, 'font_color': colors_palette['success_green'],
+                    'bg_color': colors_palette['light_green'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['success_green'], 'num_format': '0.00%'
+                }),
+                'conversion_format': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'num_format': '0.00%'
+                }),
+                'conversion_format_alt': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_royal'], 'num_format': '0.00%'
+                }),
+                'total_row': workbook.add_format({
+                    'bold': True, 'font_size': 11, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['mint_green'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 2, 'border_color': colors_palette['mint_green']
+                }),
+                'total_label': workbook.add_format({
+                    'bold': True, 'font_size': 11, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['mint_green'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 2, 'border_color': colors_palette['mint_green']
+                }),
+                'rbm_title': workbook.add_format({
+                    'bold': True, 'font_size': 18, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['dark_blue'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 2, 'border_color': colors_palette['dark_blue']
+                }),
+                'rbm_subtitle': workbook.add_format({
+                    'bold': True, 'font_size': 11, 'font_color': colors_palette['dark_blue'],
+                    'bg_color': colors_palette['light_royal'], 'align': 'center', 'valign':' vcenter',
+                    'border': 1, 'border_color': colors_palette['royal_blue'], 'italic': True
+                }),
+                'rbm_header': workbook.add_format({
+                    'bold': True, 'font_size': 11, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['royal_blue'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['royal_blue'], 'text_wrap': True
+                }),
+                'rbm_data_normal': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['white']
+                }),
+                'rbm_data_alternate': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_royal']
+                }),
+                'rbm_store_name': workbook.add_format({
+                    'font_size': 10, 'bold': True, 'align': 'left', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['white'], 'indent': 1
+                }),
+                'rbm_store_name_alt': workbook.add_format({
+                    'font_size': 10, 'bold': True, 'align': 'left', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_royal'], 'indent': 1
+                }),
+                'rbm_conversion_low': workbook.add_format({
+                    'font_size': 10, 'font_color': colors_palette['danger_red'], 'bg_color': colors_palette['light_red'],
+                    'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': colors_palette['danger_red'], 'num_format': '0.00%', 'bold': True
+                }),
+                'rbm_conversion_green': workbook.add_format({
+                    'bold': True, 'font_size': 10, 'font_color': colors_palette['success_green'],
+                    'bg_color': colors_palette['light_green'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['success_green'], 'num_format': '0.00%'
+                }),
+                'rbm_conversion_format': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'num_format': '0.00%'
+                }),
+                'rbm_conversion_format_alt': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_royal'], 'num_format': '0.00%'
+                }),
+                'rbm_total': workbook.add_format({
+                    'bold': True, 'font_size': 12, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['mint_green'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 2, 'border_color': colors_palette['mint_green']
+                }),
+                'rbm_total_label': workbook.add_format({
+                    'bold': True, 'font_size': 12, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['mint_green'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 2, 'border_color': colors_palette['mint_green']
+                }),
+                'rbm_summary': workbook.add_format({
+                    'bold': True, 'font_size': 10, 'font_color': colors_palette['royal_blue'],
+                    'bg_color': colors_palette['light_royal'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['royal_blue']
+                }),
+                'rbm_performance': workbook.add_format({
+                    'bold': True, 'font_size': 10, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['accent_purple'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['accent_purple']
+                }),
+                'asp_format': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'num_format': '₹#,##0.00'
+                }),
+                'asp_format_alt': workbook.add_format({
+                    'font_size': 10, 'align': 'center', 'valign': 'vcenter',
+                    'border': 1, 'border_color': colors_palette['neutral_gray'], 'bg_color': colors_palette['light_royal'], 'num_format': '₹#,##0.00'
+                }),
+                'asp_total': workbook.add_format({
+                    'bold': True, 'font_size': 12, 'font_color': colors_palette['white'],
+                    'bg_color': colors_palette['mint_green'], 'align': 'center', 'valign': 'vcenter',
+                    'border': 2, 'border_color': colors_palette['mint_green'], 'num_format': '₹#,##0.00'
+                })
+            }
+
+            # Set IST timezone
+            ist_time = datetime.datetime.now(pytz.timezone('Asia/Kolkata'))
+
+            # ALL STORES SHEET
+            all_data = report_df.sort_values('MTD Value', ascending=False)
+            worksheet = workbook.add_worksheet("All Stores")
+
+            # Headers
+            headers = ['Store Name', 'FTD Count', 'FTD Value', 'FTD Value Conversion', 'MTD Count', 'MTD Value', 'MTD Value Conversion', 'PREV MONTH SALE', 'DIFF %', 'ASP']
+            
+            # Optimized: Use fixed column widths for speed (works for most data)
+            column_widths = [25, 12, 12, 20, 12, 12, 20, 18, 10, 15]
+            for i, width in enumerate(column_widths):
+                worksheet.set_column(i, i, width)
+
+            # Title and subtitle
+            worksheet.merge_range(0, 0, 0, len(headers) - 1, "OSG All Stores Sales Report", formats['title'])
+            worksheet.merge_range(1, 0, 1, len(headers) - 1, f"Report Generated: {ist_time.strftime('%d %B %Y %I:%M %p IST')}", formats['subtitle'])
+
+            # Summary statistics
+            total_stores = len(all_data)
+            active_stores = len(all_data[all_data['FTD Count'] > 0])
+            inactive_stores = total_stores - active_stores
+            worksheet.merge_range(3, 0, 3, 1, "📊 SUMMARY", formats['header_secondary'])
+            worksheet.merge_range(3, 2, 3, len(headers) - 1, f"Total: {total_stores} | Active: {active_stores} | Inactive: {inactive_stores}", formats['data_normal'])
+
+            # Column headers
+            for col, header in enumerate(headers):
+                worksheet.write(5, col, header, formats['header_main'])
+
+            # Cache formats for speed (avoid dictionary lookups in loop)
+            fmt_data_normal = formats['data_normal']
+            fmt_data_alternate = formats['data_alternate']
+            fmt_store_normal = formats['data_store_name']
+            fmt_store_alt = formats['data_store_name_alt']
+            fmt_conv_normal = formats['conversion_format']
+            fmt_conv_alt = formats['conversion_format_alt']
+            fmt_conv_green = formats['conversion_green']
+            fmt_conv_low = formats['conversion_low']
+            fmt_asp_normal = formats['asp_format']
+            fmt_asp_alt = formats['asp_format_alt']
+
+            # Data rows with alternating colors (OPTIMIZED)
+            for row_idx, (_, row) in enumerate(all_data.iterrows(), start=6):
+                is_alternate = (row_idx - 6) % 2 == 1
+                data_format = fmt_data_alternate if is_alternate else fmt_data_normal
+                store_format = fmt_store_alt if is_alternate else fmt_store_normal
+                asp_format = fmt_asp_alt if is_alternate else fmt_asp_normal
+                conversion_format = fmt_conv_alt if is_alternate else fmt_conv_normal
+                
+                # Prepare row data - write entire row at once for speed
+                row_data = [
+                    row['Store Name'],
+                    int(row['FTD Count']),
+                    int(row['FTD Value']),
+                    row['FTD Value Conversion'] / 100,  # Will format separately
+                    int(row['MTD Count']),
+                    int(row['MTD Value']),
+                    row['MTD Value Conversion'] / 100,  # Will format separately
+                    int(row['PREV MONTH SALE']),
+                    f"{row['DIFF %']}%",
+                    row['ASP']
+                ]
+                
+                # Write entire row with default format first
+                worksheet.write_row(row_idx, 0, row_data, data_format)
+                
+                # Override specific cells with special formats
+                worksheet.write(row_idx, 0, row['Store Name'], store_format)
+                
+                # FTD Conversion - conditional formatting
+                ftd_conversion = row['FTD Value Conversion']
+                if ftd_conversion > 2:
+                    worksheet.write(row_idx, 3, ftd_conversion / 100, fmt_conv_green)
+                elif ftd_conversion < 2:
+                    worksheet.write(row_idx, 3, ftd_conversion / 100, fmt_conv_low)
+                else:
+                    worksheet.write(row_idx, 3, ftd_conversion / 100, conversion_format)
+                
+                # MTD Conversion - conditional formatting
+                mtd_conversion = row['MTD Value Conversion']
+                if mtd_conversion > 2:
+                    worksheet.write(row_idx, 6, mtd_conversion / 100, fmt_conv_green)
+                elif mtd_conversion < 2:
+                    worksheet.write(row_idx, 6, mtd_conversion / 100, fmt_conv_low)
+                else:
+                    worksheet.write(row_idx, 6, mtd_conversion / 100, conversion_format)
+                
+                # ASP with currency format
+                worksheet.write(row_idx, 9, row['ASP'], asp_format)
+
+            # Total row
+            total_row = len(all_data) + 7
+            worksheet.write(total_row, 0, '🎯 TOTAL', formats['total_label'])
+            worksheet.write(total_row, 1, all_data['FTD Count'].sum(), formats['total_row'])
+            worksheet.write(total_row, 2, all_data['FTD Value'].sum(), formats['total_row'])
+            total_ftd_conversion = round((all_data['FTD Value'].sum() / all_data['Product_FTD_Amount'].sum()) * 100, 2) if all_data['Product_FTD_Amount'].sum() != 0 else 0
+            worksheet.write(total_row, 3, f"{total_ftd_conversion}%", formats['total_row'])
+            worksheet.write(total_row, 4, all_data['MTD Count'].sum(), formats['total_row'])
+            worksheet.write(total_row, 5, all_data['MTD Value'].sum(), formats['total_row'])
+            total_mtd_conversion = round((all_data['MTD Value'].sum() / all_data['Product_MTD_Amount'].sum()) * 100, 2) if all_data['Product_MTD_Amount'].sum() != 0 else 0
+            worksheet.write(total_row, 6, f"{total_mtd_conversion}%", formats['total_row'])
+            worksheet.write(total_row, 7, all_data['PREV MONTH SALE'].sum(), formats['total_row'])
+            total_diff = round(((all_data['MTD Value'].sum() - all_data['PREV MONTH SALE'].sum()) / all_data['PREV MONTH SALE'].sum()) * 100, 2) if all_data['PREV MONTH SALE'].sum() != 0 else 0
+            worksheet.write(total_row, 8, f"{total_diff}%", formats['total_row'])
+            total_asp = round(all_data['MTD Value'].sum() / all_data['MTD Count'].sum(), 2) if all_data['MTD Count'].sum() != 0 else 0
+            worksheet.write(total_row, 9, total_asp, formats['asp_total'])
+
+            # Top performer insight
+            if len(all_data) > 0:
+                top_performer = all_data.iloc[0]
+                insights_row = total_row + 2
+                worksheet.merge_range(insights_row, 0, insights_row, len(headers) - 1,
+                                    f"🏆 Top Performer: {top_performer['Store Name']} (₹{int(top_performer['MTD Value']):,})",
+                                    formats['data_normal'])
+
+            # RBM SHEETS
+            rbm_headers = ['Store Name', 'MTD Value Conversion', 'FTD Value Conversion', 'MTD Count', 'FTD Count', 'MTD Value', 'FTD Value', 'PREV MONTH SALE', 'DIFF %', 'ASP']
+            for rbm in report_df['RBM'].dropna().unique():
+                rbm_data = report_df[report_df['RBM'] == rbm].sort_values('MTD Value', ascending=False)
+                worksheet_name = rbm[:31] if len(rbm) > 31 else rbm
+                rbm_ws = workbook.add_worksheet(worksheet_name)
+
+                # Optimized: Use fixed column widths for speed
+                rbm_column_widths = [25, 20, 20, 12, 12, 12, 12, 18, 10, 15]
+                for i, width in enumerate(rbm_column_widths):
+                    rbm_ws.set_column(i, i, width)
+
+                # RBM Title and subtitle
+                rbm_ws.merge_range(0, 0, 0, len(rbm_headers) - 1, f" {rbm} - Sales Performance Report", formats['rbm_title'])
+                rbm_ws.merge_range(1, 0, 1, len(rbm_headers) - 1, f"Report Period: {ist_time.strftime('%B %Y')} | Generated: {ist_time.strftime('%d %B %Y %I:%M %p IST')}", formats['rbm_subtitle'])
+
+                # RBM Summary
+                rbm_total_stores = len(rbm_data)
+                rbm_active_stores = len(rbm_data[rbm_data['FTD Count'] > 0])
+                rbm_inactive_stores = rbm_total_stores - rbm_active_stores
+                rbm_total_amount = rbm_data['MTD Value'].sum()
+                rbm_ws.merge_range(3, 0, 3, 1, "📈 PERFORMANCE OVERVIEW", formats['rbm_summary'])
+                rbm_ws.merge_range(3, 2, 3, len(rbm_headers) - 1, f"Total Stores: {rbm_total_stores} | Active: {rbm_active_stores} | Inactive: {rbm_inactive_stores} | Total Revenue: ₹{rbm_total_amount:,}", formats['rbm_summary'])
+
+                # Best performer
+                if len(rbm_data) > 0:
+                    best_performer = rbm_data.iloc[0]
+                    rbm_ws.merge_range(4, 0, 4, len(rbm_headers) - 1, f"🥇 Best Performer: {best_performer['Store Name']} - ₹{int(best_performer['MTD Value']):,}", formats['rbm_performance'])
+
+                # Headers
+                for col, header in enumerate(rbm_headers):
+                    rbm_ws.write(6, col, header, formats['rbm_header'])
+
+                # Data rows (OPTIMIZED)
+                for row_idx, (_, row) in enumerate(rbm_data.iterrows(), start=7):
+                    is_alternate = (row_idx - 7) % 2 == 1
+                    data_format = formats['rbm_data_alternate'] if is_alternate else formats['rbm_data_normal']
+                    store_format = formats['rbm_store_name_alt'] if is_alternate else formats['rbm_store_name']
+                    asp_format = formats['asp_format_alt'] if is_alternate else formats['asp_format']
+                    
+                    # Prepare row data - write entire row at once
+                    row_data = [
+                        row['Store Name'],
+                        row['MTD Value Conversion'] / 100,
+                        row['FTD Value Conversion'] / 100,
+                        int(row['MTD Count']),
+                        int(row['FTD Count']),
+                        int(row['MTD Value']),
+                        int(row['FTD Value']),
+                        int(row['PREV MONTH SALE']),
+                        f"{row['DIFF %']}%",
+                        row['ASP']
+                    ]
+                    
+                    # Write entire row
+                    rbm_ws.write_row(row_idx, 0, row_data, data_format)
+                    
+                    # Override specific cells
+                    rbm_ws.write(row_idx, 0, row['Store Name'], store_format)
+                    
+                    # MTD Conversion - conditional
+                    mtd_conversion = row['MTD Value Conversion']
+                    conversion_format = formats['rbm_conversion_format_alt'] if is_alternate else formats['rbm_conversion_format']
+                    if mtd_conversion > 2:
+                        rbm_ws.write(row_idx, 1, mtd_conversion / 100, formats['rbm_conversion_green'])
+                    elif mtd_conversion < 2:
+                        rbm_ws.write(row_idx, 1, mtd_conversion / 100, formats['rbm_conversion_low'])
+                    else:
+                        rbm_ws.write(row_idx, 1, mtd_conversion / 100, conversion_format)
+
+                    # FTD Conversion - conditional
+                    ftd_conversion = row['FTD Value Conversion']
+                    if ftd_conversion > 2:
+                        rbm_ws.write(row_idx, 2, ftd_conversion / 100, formats['rbm_conversion_green'])
+                    elif ftd_conversion < 2:
+                        rbm_ws.write(row_idx, 2, ftd_conversion / 100, formats['rbm_conversion_low'])
+                    else:
+                        rbm_ws.write(row_idx, 2, ftd_conversion / 100, conversion_format)
+                    
+                    # ASP with currency format
+                    rbm_ws.write(row_idx, 9, row['ASP'], asp_format)
+
+                # RBM Total row
+                total_row = len(rbm_data) + 8
+                rbm_ws.write(total_row, 0, '🎯 TOTAL', formats['rbm_total_label'])
+                rbm_total_mtd_conversion = round((rbm_data['MTD Value'].sum() / rbm_data['Product_MTD_Amount'].sum()) * 100, 2) if rbm_data['Product_MTD_Amount'].sum() != 0 else 0
+                rbm_ws.write(total_row, 1, f"{rbm_total_mtd_conversion}%", formats['rbm_total'])
+                rbm_total_ftd_conversion = round((rbm_data['FTD Value'].sum() / rbm_data['Product_FTD_Amount'].sum()) * 100, 2) if rbm_data['Product_FTD_Amount'].sum() != 0 else 0
+                rbm_ws.write(total_row, 2, f"{rbm_total_ftd_conversion}%", formats['rbm_total'])
+                rbm_ws.write(total_row, 3, rbm_data['MTD Count'].sum(), formats['rbm_total'])
+                rbm_ws.write(total_row, 4, rbm_data['FTD Count'].sum(), formats['rbm_total'])
+                rbm_ws.write(total_row, 5, rbm_data['MTD Value'].sum(), formats['rbm_total'])
+                rbm_ws.write(total_row, 6, rbm_data['FTD Value'].sum(), formats['rbm_total'])
+                rbm_ws.write(total_row, 7, rbm_data['PREV MONTH SALE'].sum(), formats['rbm_total'])
+                total_prev = rbm_data['PREV MONTH SALE'].sum()
+                total_curr = rbm_data['MTD Value'].sum()
+                overall_growth = round(((total_curr - total_prev) / total_prev) * 100, 2) if total_prev != 0 else 0
+                rbm_ws.write(total_row, 8, f"{overall_growth}%", formats['rbm_total'])
+                overall_asp = round(rbm_data['MTD Value'].sum() / rbm_data['MTD Count'].sum(), 2) if rbm_data['MTD Count'].sum() != 0 else 0
+                rbm_ws.write(total_row, 9, overall_asp, formats['asp_total'])
+
+                # RBM Insights
+                insights_row = total_row + 2
+                if overall_growth > 15:
+                    rbm_ws.merge_range(insights_row, 0, insights_row, len(rbm_headers) - 1,
+                                     f"📈 Excellent Growth: {overall_growth}% increase from previous month",
+                                     formats['rbm_summary'])
+                elif overall_growth < 0:
+                    rbm_ws.merge_range(insights_row, 0, insights_row, len(rbm_headers) - 1,
+                                     f"📉 Needs Attention: {abs(overall_growth)}% decrease from previous month",
+                                     formats['rbm_summary'])
+                else:
+                    rbm_ws.merge_range(insights_row, 0, insights_row, len(rbm_headers) - 1,
+                                     f"📊 Stable Performance: Less change from previous month",
+                                     formats['rbm_summary'])
+
+                # Top 3 performers
+                insights_row += 1
+                top_3_stores = rbm_data.head(3)
+                if len(top_3_stores) > 0:
+                    top_stores_text = " | ".join([f"{store['Store Name']}: ₹{int(store['MTD Value']):,}"
+                                                for _, store in top_3_stores.iterrows()])
+                    rbm_ws.merge_range(insights_row, 0, insights_row, len(rbm_headers) - 1,
+                                     f"🏆 Top 3 Performers: {top_stores_text}",
+                                     formats['rbm_summary'])
+
+        excel_output.seek(0)
+        return send_file(excel_output, download_name=f"OSG_Sales_Report_{today.strftime('%Y%m%d')}.xlsx", as_attachment=True)
+
+    except Exception as e:
+        print(f"Report 1 Error: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error generating report: {str(e)}", "error")
+        return redirect(url_for('reports_tools'))
+
+
+@app.route('/reports/generate_2', methods=['POST'])
+@login_required
+def generate_report_2():
+    try:
+        selected_date_str = request.form.get('selected_date')
+        time_slot = request.form.get('time_slot')
+        book2_file = request.files.get('book2')
+
+        if not book2_file:
+            flash("Daily Sales Report file is required.", "error")
+            return redirect(url_for('reports_tools'))
+
+        # Feature Store List
+        future_path = os.path.join(BASE_DIR, "Future Store List.xlsx")
+        
+        if not os.path.exists(future_path):
+             flash("Future Store List.xlsx not found on server.", "error")
+             return redirect(url_for('reports_tools'))
+             
+        future_df = pd.read_excel(future_path) 
+
+        book2_df = pd.read_excel(book2_file)
+        book2_df.rename(columns={'Branch': 'Store'}, inplace=True)
+        
+        agg = book2_df.groupby('Store', as_index=False).agg({
+            'QUANTITY': 'sum',
+            'AMOUNT': 'sum'
+        })
+        
+        all_stores = pd.DataFrame(pd.concat([future_df['Store'], agg['Store']]).unique(), columns=['Store'])
+        merged = all_stores.merge(agg, on='Store', how='left')
+        merged['QUANTITY'] = merged['QUANTITY'].fillna(0).astype(int)
+        merged['AMOUNT'] = merged['AMOUNT'].fillna(0).astype(int)
+        
+        merged = merged.sort_values(by='AMOUNT', ascending=False).reset_index(drop=True)
+        
+        total = pd.DataFrame([{
+            'Store': 'TOTAL',
+            'QUANTITY': merged['QUANTITY'].sum(),
+            'AMOUNT': merged['AMOUNT'].sum()
+        }])
+        
+        final_df = pd.concat([merged, total], ignore_index=True)
+        final_df.rename(columns={'Store': 'Branch'}, inplace=True)
+
+        # Excel Generation with OpenPyXL
+        buffer = io.BytesIO()
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Store Report"
+        
+        title_text = f"{selected_date_str} EW Sale Till {time_slot}"
+        ws.merge_cells('A1:C1')
+        ws['A1'] = title_text
+        ws['A1'].font = Font(bold=True, size=11, color="FFFFFF")
+        ws['A1'].fill = PatternFill("solid", fgColor="4F81BD")
+        ws['A1'].alignment = Alignment(horizontal='center')
+        
+        header_fill = PatternFill("solid", fgColor="4F81BD")
+        data_fill = PatternFill("solid", fgColor="DCE6F1")
+        red_fill = PatternFill("solid", fgColor="F4CCCC")
+        total_fill = PatternFill("solid", fgColor="10B981")
+        border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+        
+        for r_idx, row in enumerate(dataframe_to_rows(final_df, index=False, header=True), start=2):
+            for c_idx, value in enumerate(row, 1):
+                cell = ws.cell(row=r_idx, column=c_idx, value=value)
+                if r_idx == 2: # Header
+                    cell.fill = header_fill
+                    cell.font = Font(bold=True, color="FFFFFF")
+                elif row[0] == 'TOTAL':
+                    cell.fill = total_fill
+                    cell.font = Font(bold=True, color="FFFFFF")
+                elif (c_idx == 1 and row[1] <= 0) or ((c_idx == 2 or c_idx == 3) and value <= 0): # Branch, Qty, Amt check
+                    cell.fill = red_fill
+                else:
+                    cell.fill = data_fill
+                cell.border = border
+                cell.alignment = Alignment(horizontal='center')
+        
+        # approximate cleanup
+        wb.save(buffer)
+        buffer.seek(0)
+        return send_file(buffer, download_name=f"Store_Summary_{selected_date_str}_{time_slot}.xlsx", as_attachment=True)
+
+    except Exception as e:
+        print(f"Report 2 Error: {e}")
+        flash(f"Error generating report: {str(e)}", "error")
+        return redirect(url_for('reports_tools'))
+
+@app.route('/reports/map_data', methods=['POST'])
+@login_required
+def map_data():
+    try:
+        osg_file = request.files.get('osg_file')
+        product_file = request.files.get('product_file')
+        
+        if not osg_file or not product_file:
+            flash("Both OSG and Product files are required.", "error")
+            return redirect(url_for('reports_tools'))
+            
+        osg_df = pd.read_excel(osg_file)
+        product_df = pd.read_excel(product_file, converters={'IMEI': str})
+        
+        # ... Mapping Logic ...
+        # SKU Mapping Dictionary
+        sku_category_mapping = {
+            "Warranty : Water Cooler/Dispencer/Geyser/RoomCooler/Heater": [
+                "COOLER", "DISPENCER", "GEYSER", "ROOM COOLER", "HEATER", "WATER HEATER", "WATER DISPENSER"
+            ],
+            "Warranty : Fan/Mixr/IrnBox/Kettle/OTG/Grmr/Geysr/Steamr/Inductn": [
+                "FAN", "MIXER", "IRON BOX", "KETTLE", "OTG", "GROOMING KIT", "GEYSER", "STEAMER", "INDUCTION",
+                "CEILING FAN", "FOOD PROCESSOR","TOWER FAN", "PEDESTAL FAN", "INDUCTION COOKER", "ELECTRIC KETTLE", "WALL FAN", "MIXER GRINDER", "CELLING FAN"
+            ],
+            "AC : EWP : Warranty : AC": ["AC", "AIR CONDITIONER", "AC INDOOR"],
+            "HAEW : Warranty : Air Purifier/WaterPurifier": ["AIR PURIFIER", "WATER PURIFIER"],
+            "HAEW : Warranty : Dryer/MW/DishW": ["DRYER", "MICROWAVE OVEN", "DISH WASHER", "MICROWAVE OVEN-CONV"],
+            "HAEW : Warranty : Ref/WM": [
+                "REFRIGERATOR", "WASHING MACHINE", "WASHING MACHINE-TL", "REFRIGERATOR-DC",
+                "WASHING MACHINE-FL", "WASHING MACHINE-SA", "REF", "REFRIGERATOR-CBU", "REFRIGERATOR-FF", "WM"
+            ],
+            "HAEW : Warranty : TV": ["TV", "TV 28 %", "TV 18 %"],
+            "TV : TTC : Warranty and Protection : TV": ["TV", "TV 28 %", "TV 18 %"],
+            "TV : Spill and Drop Protection": ["TV", "TV 28 %", "TV 18 %"],
+            "HAEW : Warranty :Chop/Blend/Toast/Air Fryer/Food Processr/JMG/Induction": [
+                "CHOPPER", "BLENDER", "TOASTER", "AIR FRYER", "FOOD PROCESSOR", "JUICER", "INDUCTION COOKER"
+            ],
+            "HAEW : Warranty : HOB and Chimney": ["HOB", "CHIMNEY"],
+            "HAEW : Warranty : HT/SoundBar/AudioSystems/PortableSpkr": [
+                "HOME THEATRE", "AUDIO SYSTEM", "SPEAKER", "SOUND BAR", "PARTY SPEAKER"
+            ],
+            "HAEW : Warranty : Vacuum Cleaner/Fans/Groom&HairCare/Massager/Iron": [
+                "VACUUM CLEANER", "FAN", "MASSAGER", "IRON BOX", "CEILING FAN", "TOWER FAN", "PEDESTAL FAN", "WALL FAN", "ROBO VACCUM CLEANER"
+            ],
+            "AC AMC": ["AC", "AC INDOOR"]
+        }
+
+        # Conversions
+        product_df['Category'] = product_df['Category'].str.upper().fillna('')
+        product_df['Model'] = product_df['Model'].fillna('')
+        product_df['Customer Mobile'] = product_df['Customer Mobile'].astype(str)
+        product_df['Invoice Number'] = product_df['Invoice Number'].astype(str)
+        product_df['Item Rate'] = pd.to_numeric(product_df['Item Rate'], errors='coerce')
+        product_df['IMEI'] = product_df['IMEI'].astype(str).fillna('')
+        product_df['Brand'] = product_df['Brand'].fillna('')
+        
+        # Check if Customer Mobile exists in OSG df
+        if 'Customer Mobile' in osg_df.columns:
+            osg_df['Customer Mobile'] = osg_df['Customer Mobile'].astype(str)
+        else:
+             # Try to find a mobile column
+            mob_col = None
+            for c in osg_df.columns:
+                if "mobile" in c.lower(): mob_col = c; break
+            if mob_col: osg_df['Customer Mobile'] = osg_df[mob_col].astype(str)
+            else: 
+                flash("Customer Mobile column not found in OSG file", "error")
+                return redirect(url_for('reports_tools'))
+
+        def extract_price_slab(text):
+            match = re.search(r"Slab\s*:\s*(\d+)K-(\d+)K", str(text))
+            if match:
+                return int(match.group(1)) * 1000, int(match.group(2)) * 1000
+            return None, None
+
+        def get_model(row):
+            mobile = row['Customer Mobile']
+            retailer_sku = str(row.get('Retailer SKU', ''))
+            invoice = str(row.get('Invoice Number', '')) # OSG invoice
+            
+            user_products = product_df[product_df['Customer Mobile'] == mobile]
+
+            if user_products.empty:
+                return ''
+            unique_models = user_products['Model'].dropna().unique()
+            if len(unique_models) == 1:
+                return unique_models[0]
+
+            mapped_keywords = []
+            for sku_key, keywords in sku_category_mapping.items():
+                if sku_key in retailer_sku:
+                    mapped_keywords = [kw.lower() for kw in keywords]
+                    break   
+
+            filtered = user_products[user_products['Category'].str.lower().isin(mapped_keywords)]
+            if filtered['Model'].nunique() == 1:
+                return filtered['Model'].iloc[0]
+
+            slab_min, slab_max = extract_price_slab(retailer_sku)
+            if slab_min and slab_max:
+                slab_filtered = filtered[(filtered['Item Rate'] >= slab_min) & (filtered['Item Rate'] <= slab_max)]
+                if slab_filtered['Model'].nunique() == 1:
+                    return slab_filtered['Model'].iloc[0]
+                invoice_filtered = slab_filtered[slab_filtered['Invoice Number'].astype(str) == invoice]
+                if invoice_filtered['Model'].nunique() == 1:
+                    return invoice_filtered['Model'].iloc[0]
+            return ''
+
+        # Apply Model Logic
+        osg_df['Model'] = osg_df.apply(get_model, axis=1)
+        
+        # Merge other details based on Mobile + Model
+        category_brand_df = product_df[['Customer Mobile', 'Model', 'Category', 'Brand']].drop_duplicates()
+        osg_df = osg_df.merge(category_brand_df, on=['Customer Mobile', 'Model'], how='left')
+
+        # Pool allocation logic
+        invoice_pool = defaultdict(list)
+        itemrate_pool = defaultdict(list)
+        imei_pool = defaultdict(list)
+
+        for _, row in product_df.iterrows():
+            key = (row['Customer Mobile'], row['Model'])
+            invoice_pool[key].append(row['Invoice Number'])
+            itemrate_pool[key].append(row['Item Rate'])
+            imei_pool[key].append(row['IMEI'])
+
+        invoice_usage_counter = defaultdict(int)
+        itemrate_usage_counter = defaultdict(int)
+        imei_usage_counter = defaultdict(int)
+
+        def assign_from_pool(row, pool, counter_dict):
+            key = (row['Customer Mobile'], row['Model'])
+            values = pool.get(key, [])
+            index = counter_dict[key]
+            if index < len(values):
+                counter_dict[key] += 1
+                return values[index]
+            return ''
+        osg_df['Product Invoice Number'] = osg_df.apply(lambda row: assign_from_pool(row, invoice_pool, invoice_usage_counter), axis=1)
+        osg_df['Item Rate'] = osg_df.apply(lambda row: assign_from_pool(row, itemrate_pool, itemrate_usage_counter), axis=1)
+        osg_df['IMEI'] = osg_df.apply(lambda row: assign_from_pool(row, imei_pool, imei_usage_counter), axis=1)
+        
+        # Store Code Extraction (Complete Version)
+        osg_df['Store Code'] = osg_df['Product Invoice Number'].astype(str).apply(
+            lambda x: re.search(r'\b([A-Z]{2,})\b', x).group(1) if re.search(r'\b([A-Z]{2,})\b', x) else ''
+        )
+        
+        # Warranty Duration Extractor (Complete Version with All Patterns)
+        def extract_warranty_duration(sku):
+            sku = str(sku)
+            # Pattern 1: Dur : X+Y
+            match = re.search(r'Dur\s*:\s*(\d+)\+(\d+)', sku)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+            # Pattern 2: X+Y SDP-Z
+            match = re.search(r'(\d+)\+(\d+)\s*SDP-(\d+)', sku)
+            if match:
+                return int(match.group(1)), f"{match.group(3)}P+{match.group(2)}W"
+            # Pattern 3: Dur : X
+            match = re.search(r'Dur\s*:\s*(\d+)', sku)
+            if match:
+                return 1, int(match.group(1))
+            # Pattern 4: X+Y
+            match = re.search(r'(\d+)\+(\d+)', sku)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+            return '', ''
+        
+        osg_df[['Manufacturer Warranty', 'Duration (Year)']] = osg_df['Retailer SKU'].apply(
+            lambda sku: pd.Series(extract_warranty_duration(sku))
+        )
+        
+        # Define Final Columns (Complete Structure)
+        final_columns = [
+            'Customer Mobile', 'Date', 'Invoice Number','Product Invoice Number', 'Customer Name', 'Store Code', 'Branch', 'Region',
+            'IMEI', 'Category', 'Brand', 'Quantity', 'Item Code', 'Model', 'Plan Type', 'EWS QTY', 'Item Rate',
+            'Plan Price', 'Sold Price', 'Email', 'Product Count', 'Manufacturer Warranty', 'Retailer SKU', 'OnsiteGo SKU',
+            'Duration (Year)', 'Total Coverage', 'Comment', 'Return Flag', 'Return against invoice No.',
+            'Primary Invoice No.'
+        ]
+        
+        # Add missing columns and set required values
+        for col in final_columns:
+            if col not in osg_df.columns:
+                osg_df[col] = ''
+        osg_df['Quantity'] = 1
+        osg_df['EWS QTY'] = 1
+        osg_df = osg_df[final_columns]
+        
+        # Row Highlighting Logic for Missing Data
+        def highlight_row(row):
+            missing_fields = pd.isna(row.get('Model')) or str(row.get('Model')).strip() == ''
+            missing_fields |= pd.isna(row.get('IMEI')) or str(row.get('IMEI')).strip() == ''
+            try:
+                if float(row.get('Plan Price', 0)) < 0:
+                    missing_fields |= True
+            except:
+                missing_fields |= True
+            return ['background-color: lightblue'] * len(row) if missing_fields else [''] * len(row)
+        
+        # Excel Generation with Styling
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # Apply styling
+            styled_df = osg_df.style.apply(highlight_row, axis=1)
+            styled_df.to_excel(writer, index=False, sheet_name='Mapped Data')
+        output.seek(0)
+        
+        return send_file(output, download_name="OSG_Product_Mapping_Report.xlsx", as_attachment=True)
+    except Exception as e:
+        print(f"Mapping Error: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Mapping Failed: {str(e)}", "error")
+        return redirect(url_for('reports_tools'))
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+

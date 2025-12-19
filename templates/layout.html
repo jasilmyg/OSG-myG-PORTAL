@@ -43,10 +43,13 @@
                     class="nav-item {% if request.endpoint == 'analytics_dashboard' %}active{% endif %}">
                     <i class="ri-bar-chart-box-line"></i> Analytics
                 </a>
-                <a href="{{ url_for('submit_claim') }}"
-                    class="nav-item {% if request.endpoint == 'submit_claim' %}active{% endif %}">
-                    <i class="ri-add-circle-line"></i> New Claim
-                </a>
+                <a href="{{ url_for('reports_tools') }}"
+                    class="nav-item {% if request.endpoint == 'reports_tools' %}active{% endif %}">
+                    <i class="ri-file-chart-line"></i> Reports
+                    <a href="{{ url_for('submit_claim') }}"
+                        class="nav-item {% if request.endpoint == 'submit_claim' %}active{% endif %}">
+                        <i class="ri-add-circle-line"></i> New Claim
+                    </a>
             </nav>
 
             <div class="user-profile">
