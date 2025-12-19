@@ -290,6 +290,10 @@ def dashboard():
     
     return render_template('dashboard.html', claims=claims, total=total, pending=pending, completed=completed)
 
+@app.route('/health')
+def health_check():
+    return jsonify({"status": "healthy", "timestamp": datetime.datetime.now().isoformat()}), 200
+
  
 
 # ...
@@ -1712,5 +1716,6 @@ def map_data():
         return redirect(url_for('reports_tools'))
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
 
