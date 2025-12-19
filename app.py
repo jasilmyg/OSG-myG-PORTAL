@@ -310,6 +310,7 @@ def load_excel_data():
     global CACHED_DF, LAST_MOD_TIME
     try:
         if not os.path.exists(EXCEL_FILE):
+            print(f"Excel file not found: {EXCEL_FILE}")
             return pd.DataFrame()
             
         current_mtime = os.path.getmtime(EXCEL_FILE)
@@ -320,21 +321,41 @@ def load_excel_data():
 
         # 2. Pickle Cache (Disk)
         if os.path.exists(CACHE_FILE):
+            # Check if cache is strictly newer than excel
             if os.path.getmtime(CACHE_FILE) >= current_mtime:
                 try:
-                    # Fast load
                     df = pd.read_pickle(CACHE_FILE)
                     CACHED_DF = df
                     LAST_MOD_TIME = current_mtime
                     return df
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Cache load failed: {e}")
 
-        # 3. Fresh Load
-        print("Loading Excel...")
-        df = pd.read_excel(EXCEL_FILE)
+        # 3. Fresh Load (Optimized)
+        print("Loading Excel with optimization...")
         
-        # Normalize
+        # Define critical columns to reduce memory
+        # Based on file structure: 
+        # ['Date', 'Invoice No', 'OSID', 'Customer', 'Store Name', 'Serial No', 'Category', 'Brand', 'Model', 
+        #  'Plan Type', 'Item Rate', 'Onsite Plan Price', 'myG Plan Price', 'Mobile No', ...]
+        
+        cols_to_use = [
+            'Customer', 'Mobile No', 'Invoice No', 'Store Name', 
+            'Model', 'Serial No', 'OSID', 'Date'
+        ]
+        
+        try:
+            df = pd.read_excel(
+                EXCEL_FILE, 
+                usecols=lambda x: x in cols_to_use, 
+                engine='openpyxl'
+            )
+        except ValueError:
+            # Fallback if columns don't match exactly (e.g. slight name diffs)
+            print("Optimized load failed, falling back to full load")
+            df = pd.read_excel(EXCEL_FILE, engine='openpyxl')
+        
+        # Normalize headers
         df.columns = (
             df.columns.astype(str)
             .str.strip()
@@ -343,37 +364,47 @@ def load_excel_data():
             .str.replace(r"\s+", " ", regex=True)
         )
         
-        # Optimized Mobile Column
-        mob_col = None
-        candidates = ["mobile no", "mobile", "mobile_no", "mobile no rf", "mob", "phoneno", "phone", "contact"]
-        for v in candidates:
-            if v in df.columns:
-                mob_col = v
-                break
-        
-        if not mob_col:
-            for c in df.columns:
-                if "mobile" in c or "phone" in c:
-                    mob_col = c
-                    break
-
-        if mob_col:
+        # Optimized Mobile Column Logic
+        # We know the column is likely 'mobile no' based on inspection
+        if 'mobile no' in df.columns:
+            # Drop NaN and convert to string efficiently
+            df = df.dropna(subset=['mobile no'])
             df['target_mobile_str'] = (
-                df[mob_col]
-                .fillna('')
+                df['mobile no']
                 .astype(str)
                 .str.replace(r'\.0$', '', regex=True)
                 .str.strip()
             )
-            
+        else:
+            # Fallback scan
+            for c in df.columns:
+                if "mobile" in c or "phone" in c:
+                    df = df.dropna(subset=[c])
+                    df['target_mobile_str'] = (
+                        df[c]
+                        .astype(str)
+                        .str.replace(r'\.0$', '', regex=True)
+                        .str.strip()
+                    )
+                    break
+
+        if 'target_mobile_str' not in df.columns:
+            print("Warning: Mobile column not found in Excel")
+
         # Save Cache
-        df.to_pickle(CACHE_FILE)
-        CACHED_DF = df
-        LAST_MOD_TIME = current_mtime
+        try:
+            df.to_pickle(CACHE_FILE)
+            CACHED_DF = df
+            LAST_MOD_TIME = current_mtime
+        except Exception as e:
+            print(f"Failed to write cache: {e}")
+            
         return df
 
     except Exception as e:
         print(f"Excel Load Error: {e}")
+        import traceback
+        traceback.print_exc()
         return pd.DataFrame()
 
 def col_lookup(df, variations):
