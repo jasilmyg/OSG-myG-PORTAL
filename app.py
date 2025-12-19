@@ -2,7 +2,7 @@ import os
 import time
 import datetime
 import pytz
-import pandas as pd
+# import pandas as pd (Moved to local scope)
 import requests
 import smtplib
 from functools import wraps
@@ -15,12 +15,7 @@ from werkzeug.utils import secure_filename
 import io
 import re
 from collections import defaultdict
-from openpyxl import Workbook
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-from openpyxl.utils.dataframe import dataframe_to_rows
-from openpyxl.utils import get_column_letter
 from flask import send_file
-import xlsxwriter
 
 # ----------------------
 # CONFIG
@@ -311,6 +306,7 @@ LAST_MOD_TIME = 0
 CACHE_FILE = os.path.join(BASE_DIR, "cache.pkl")
 
 def load_excel_data():
+    import pandas as pd
     global CACHED_DF, LAST_MOD_TIME
     try:
         if not os.path.exists(EXCEL_FILE):
@@ -875,6 +871,8 @@ def reports_tools():
 @app.route('/reports/generate_1', methods=['POST'])
 @login_required
 def generate_report_1():
+    import pandas as pd
+    import xlsxwriter
     try:
         report_date_str = request.form.get('report_date')
         prev_date_str = request.form.get('prev_date')
@@ -1412,6 +1410,10 @@ def generate_report_1():
 @app.route('/reports/generate_2', methods=['POST'])
 @login_required
 def generate_report_2():
+    import pandas as pd
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils.dataframe import dataframe_to_rows
     try:
         selected_date_str = request.form.get('selected_date')
         time_slot = request.form.get('time_slot')
@@ -1502,6 +1504,7 @@ def generate_report_2():
 @app.route('/reports/map_data', methods=['POST'])
 @login_required
 def map_data():
+    import pandas as pd
     try:
         osg_file = request.files.get('osg_file')
         product_file = request.files.get('product_file')
