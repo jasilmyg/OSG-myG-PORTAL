@@ -91,8 +91,13 @@ function updateKPIs() {
     const kpiRepairEl = document.getElementById('kpi-repair-completed');
     if (kpiRepairEl) kpiRepairEl.textContent = repairCompleted.length;
 
-    // Settled Claims
-    const settledClaims = claims.filter(c => c.complete);
+    // Replacement Approved Completed
+    const settledClaims = claims.filter(c => {
+        const hasReplacementStatus =
+            c.status === 'Replacement Approved' ||
+            c.status === 'Replacement approved';
+        return c.complete && hasReplacementStatus;
+    });
     document.getElementById('kpi-settled').textContent = settledClaims.length;
 
     // Average TAT
