@@ -605,9 +605,15 @@ function applyFilters() {
 
         // Status
         const statusValue = document.getElementById('filterStatus').value;
-        if (statusValue && claim.status !== statusValue) {
-            console.log(`Filtered out ${claim.claim_id}: Status mismatch (${claim.status} !== ${statusValue})`);
-            return false;
+        if (statusValue) {
+            if (statusValue === 'Replacement Completed') {
+                const s = (claim.status || '').toLowerCase();
+                const isReplacement = s.includes('replacement');
+                if (!(isReplacement && claim.complete)) return false;
+            } else if (claim.status !== statusValue) {
+                console.log(`Filtered out ${claim.claim_id}: Status mismatch (${claim.status} !== ${statusValue})`);
+                return false;
+            }
         }
 
         // Replacement Stage (ONLY applies to claims with status "Replacement approved")
