@@ -824,7 +824,7 @@ def update_claim(id):
     if 'replacement_settled_accounts' in data: payload["Settled With Accounts (Yes/No)"] = fmt_bool(data['replacement_settled_accounts'])
     
     # Complete flag
-    if 'complete' in data: payload["Complete"] = fmt_bool(data['complete'])
+    if 'complete' in data: payload["Complete (Yes/No)"] = fmt_bool(data['complete'])
 
     # CRITICAL: Mutual exclusivity of workflows
     # If status is 'Repair Completed', clear all Replacement Workflow data
