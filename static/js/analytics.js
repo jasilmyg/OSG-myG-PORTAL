@@ -62,10 +62,20 @@ function updateKPIs() {
     // Total Claims
     document.getElementById('kpi-total').textContent = claims.length;
 
-    // Open Claims (not settled or closed)
+    // Open Claims
     const openClaims = claims.filter(c => {
         const s = (c.status || '').toLowerCase();
-        return s !== 'settled' && s !== 'closed' && !c.complete;
+
+        // Exclude definitively closed statuses
+        if (s === 'settled' || s === 'closed' || s === 'repair completed') return false;
+
+        // For Replacement Approved, it's only "closed" if the workflow is complete
+        if (s.includes('replacement') && s.includes('approved')) {
+            return !c.complete;
+        }
+
+        // All other statuses (Registered, Follow Up, etc.) are Open
+        return true;
     });
     document.getElementById('kpi-open').textContent = openClaims.length;
 
