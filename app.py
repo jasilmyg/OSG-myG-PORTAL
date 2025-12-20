@@ -207,6 +207,12 @@ class ClaimWrapper:
     @property
     def complete(self):
         """A claim is complete if marked complete OR if status is Repair Completed/Closed OR all replacement workflow steps are done"""
+        status = (self.status or "").strip().lower()
+        
+        # Explicitly exclude active statuses from being complete
+        if status in ["submitted", "registered", "follow up"]:
+            return False
+
         # Check complete checkbox
         if self._bool("Complete") or self._bool("Complete (Yes/No)"):
             return True
