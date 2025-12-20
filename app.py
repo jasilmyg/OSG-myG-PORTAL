@@ -784,7 +784,8 @@ def update_claim(id):
     # Complete flag
     if 'complete' in data: payload["Complete"] = fmt_bool(data['complete'])
 
-    # CRITICAL: If status is 'Repair Completed', clear all Replacement Workflow data
+    # CRITICAL: Mutual exclusivity of workflows
+    # If status is 'Repair Completed', clear all Replacement Workflow data
     if payload.get("Status") == "Repair Completed":
         payload["Confirmation Pending From Customer (Yes/No)"] = ""
         payload["Approval Mail Received From Onsitego (Yes/No)"] = ""
@@ -792,6 +793,10 @@ def update_claim(id):
         payload["Invoice Generated (Yes/No)"] = ""
         payload["Invoice Sent To Onsitego (Yes/No)"] = ""
         payload["Settled With Accounts (Yes/No)"] = ""
+    
+    # If status is 'Replacement Approved', clear Repair Workflow data
+    if payload.get("Status") == "Replacement Approved":
+        payload["Repair Feedback Completed (Yes/No)"] = ""
 
     # Sync
     try:
