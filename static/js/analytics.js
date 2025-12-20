@@ -63,9 +63,10 @@ function updateKPIs() {
     document.getElementById('kpi-total').textContent = claims.length;
 
     // Open Claims (not settled or closed)
-    const openClaims = claims.filter(c =>
-        c.status !== 'Settled' && c.status !== 'Closed' && !c.complete
-    );
+    const openClaims = claims.filter(c => {
+        const s = (c.status || '').toLowerCase();
+        return s !== 'settled' && s !== 'closed' && !c.complete;
+    });
     document.getElementById('kpi-open').textContent = openClaims.length;
 
     // Replacement Pending (any replacement stage incomplete)
