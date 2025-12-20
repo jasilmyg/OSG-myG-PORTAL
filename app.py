@@ -150,6 +150,8 @@ class ClaimWrapper:
     @property
     def serial_no(self): return self.data.get("Serial Number")
     @property
+    def sr_no(self): return self.data.get("SR No")
+    @property
     def model(self): return self.data.get("Model")
     @property
     def osid(self): return self.data.get("OSID")
@@ -783,7 +785,9 @@ def get_claim(id):
         "complete": parse_bool(found.data.get("Complete (Yes/No)")),
         
         "tat": found.tat,
-        "assigned_staff": found.assigned_staff or ""
+        "assigned_staff": found.assigned_staff or "",
+        "sr_no": found.sr_no or "",
+        "osid": found.osid or ""
     })
 
 @app.route('/update-claim/<string:id>', methods=['POST'])
@@ -803,6 +807,7 @@ def update_claim(id):
     if 'follow_up_notes' in data: payload["Follow Up - Notes"] = data['follow_up_notes']
     if 'remarks' in data: payload["Remarks"] = data['remarks']
     if 'assigned_staff' in data: payload["Assigned Staff"] = data['assigned_staff']
+    if 'sr_no' in data: payload["SR No"] = data['sr_no']
     
     if 'follow_up_date' in data: payload["Follow Up - Dates"] = data['follow_up_date']
     if 'approval_mail_date' in data: payload["Approval Mail Received Date"] = data['approval_mail_date']
@@ -1007,6 +1012,7 @@ def get_analytics_data():
                 'model': claim.model or '',
                 'invoice_number': claim.invoice_no or '',
                 'serial_number': claim.serial_no or '',
+                'sr_no': claim.sr_no or '',
                 'osid': claim.osid or '',
                 'issue': claim.issue or '',
                 'status': claim.status or 'Unknown',

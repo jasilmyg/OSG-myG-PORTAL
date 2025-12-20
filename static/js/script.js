@@ -119,7 +119,6 @@ async function searchCustomer() {
             document.getElementById('disp-mobile').textContent = mobile;
             document.getElementById('hidden_name').value = "";
             document.getElementById('hidden_mobile').value = mobile;
-
             // Render Manual Product Form (Single for now)
             // We treat it as one selected product
             const manualProd = { model: '', serial: '', invoice: '', osid: 'MANUAL_ENTRY', isManual: true };
@@ -353,6 +352,13 @@ async function openClaimModal(id) {
 
         const staff = document.getElementById('assignedStaff');
         if (staff) staff.value = data.assigned_staff || '';
+
+        // Populate new fields
+        const osidEl = document.getElementById('claimOsid');
+        if (osidEl) osidEl.value = data.osid || '';
+
+        const srNoEl = document.getElementById('claimSrNo');
+        if (srNoEl) srNoEl.value = data.sr_no || '';
 
         // Repair Section
         const chkFb = document.getElementById('chk_repair_feedback');
@@ -595,6 +601,8 @@ async function saveClaimChanges() {
 
         // Use the combined history for "Follow Up - Notes" column
         follow_up_notes: combinedNotes,
+        assigned_staff: (document.getElementById('assignedStaff')?.value || '').trim(),
+        sr_no: (document.getElementById('claimSrNo')?.value || '').trim(),
     };
 
     if (newNote) {
