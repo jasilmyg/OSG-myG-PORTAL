@@ -204,7 +204,7 @@ class ClaimWrapper:
     
     @property
     def complete(self):
-        """A claim is complete if marked complete OR if status is Repair Completed/Closed"""
+        """A claim is complete if marked complete OR if status is Repair Completed/Closed OR all replacement workflow steps are done"""
         # Check complete checkbox
         if self._bool("Complete") or self._bool("Complete (Yes/No)"):
             return True
@@ -213,6 +213,19 @@ class ClaimWrapper:
         status = (self.status or "").strip().lower()
         if status in ["repair completed", "closed"]:
             return True
+        
+        # Check if all replacement workflow steps are completed
+        if status == "replacement approved":
+            all_steps_done = (
+                self.cust_confirmation_pending and
+                self.approval_mail_received and
+                self.mail_sent_to_store and
+                self.invoice_generated and
+                self.invoice_sent_osg and
+                self.settled_with_accounts
+            )
+            if all_steps_done:
+                return True
             
         return False
 
