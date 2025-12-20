@@ -287,31 +287,33 @@
                         </div>
                     </div>
 
-                    <!-- Follow Up Section -->
-                    <div id="wf-section-followup" class="hidden" style="margin-top: 20px;">
-                        <div class="workflow-title" style="margin-bottom: 20px;">Workflow Status: Follow Up</div>
+                </div>
+            </div>
 
-                        <div class="field-group">
-                            <label>Follow Up Date</label>
-                            <input type="date" id="followUpDate">
-                        </div>
-                        <div class="field-group">
-                            <label>History</label>
-                            <textarea id="followUpHistory" rows="6" readonly class="read-only-field"></textarea>
-                        </div>
-                        <div class="field-group">
-                            <label>Add New Note</label>
-                            <textarea id="newFollowUpNote" rows="3"
-                                placeholder="Enter new follow up details here..."></textarea>
-                        </div>
-                    </div>
+            <!-- Follow Up Section (Sibling, not nested) -->
+            <div id="wf-section-followup" class="hidden" style="margin-top: 20px;">
+                <div class="workflow-title" style="margin-bottom: 20px;">Workflow Status: Follow Up</div>
+
+                <div class="field-group">
+                    <label>Follow Up Date</label>
+                    <input type="date" id="followUpDate">
+                </div>
+                <div class="field-group">
+                    <label>History</label>
+                    <textarea id="followUpHistory" rows="6" readonly class="read-only-field"></textarea>
+                </div>
+                <div class="field-group">
+                    <label>Add New Note</label>
+                    <textarea id="newFollowUpNote" rows="3"
+                        placeholder="Enter new follow up details here..."></textarea>
                 </div>
             </div>
         </div>
+    </div>
 
-        <div class="modal-footer">
-            <button id="btn-save-changes" class="btn-primary" onclick="saveClaimChanges()">Save Changes</button>
-        </div>
+    <div class="modal-footer">
+        <button id="btn-save-changes" class="btn-primary" onclick="saveClaimChanges()">Save Changes</button>
+    </div>
     </div>
 </template>
 

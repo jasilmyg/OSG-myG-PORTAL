@@ -801,6 +801,9 @@ function openAnalyticsModal(claimId) {
     document.getElementById('m_product').textContent = claim.product || claim.model;
     document.getElementById('m_date').textContent = formatDate(claim.submitted_date);
     document.getElementById('m_issue').textContent = claim.issue || 'No issue description';
+    document.getElementById('m_osid').textContent = claim.osid || '--';
+    document.getElementById('m_invoice').textContent = claim.invoice_number || '--';
+    document.getElementById('m_sr_no').textContent = claim.sr_no || '--';
 
     // Populate Workflow Steps
     const stepsContainer = document.getElementById('m_workflow_steps');

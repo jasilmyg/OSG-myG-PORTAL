@@ -1023,6 +1023,7 @@ def get_analytics_data():
                 'issue': claim.issue or '',
                 'status': claim.status or 'Unknown',
                 'remarks': claim.remarks or '',
+                'follow_up_notes': claim.follow_up_notes or '',
                 'claim_settled_date': claim.claim_settled_date or '',
                 'tat': tat,
                 
