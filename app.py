@@ -22,6 +22,7 @@ from flask import send_file
 # ----------------------
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 EXCEL_FILE = os.path.join(BASE_DIR, "Onsitego OSID (1).xlsx")
+CACHE_FILE = os.path.join(BASE_DIR, "cache.pkl")
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 DB_FILE = os.path.join(BASE_DIR, "claims.db")
 
@@ -264,11 +265,7 @@ def fetch_claims_from_sheet(force_refresh=False):
             return CLAIMS_CACHE['data']
         return []
 
-# ... (Reuse load_excel_data, lookup_customer, email logic here) ...
-# I will NOT rewrite them in this replacement block to save space, assuming they persist if I don't overwrite effectively.
-# Wait, I am overwriting the DB Model and Routes. I need to keep the other helpers.
-# The tool 'replace_file_content' replaces a block. I need to be careful.
-# I will target lines 32 -> end.
+
 
 # ----------------------
 # ROUTES
@@ -289,123 +286,137 @@ def dashboard():
 def health_check():
     return jsonify({"status": "healthy", "timestamp": datetime.datetime.now().isoformat()}), 200
 
- 
 
-# ...
-
-
-# ----------------------
-# HELPER FUNCTIONS
-# ----------------------
-def get_ist_now():
-    return datetime.datetime.now(pytz.timezone('Asia/Kolkata'))
-
-# Global Cache
-CACHED_DF = None
-LAST_MOD_TIME = 0
-CACHE_FILE = os.path.join(BASE_DIR, "cache.pkl")
+# Global Cache for Customer Lookup
+CUSTOMER_INDEX = {
+    'data': {},      # {mobile: {"name": str, "products": []}}
+    'last_mod': 0
+}
 
 def load_excel_data():
+    """
+    Optimized loader: 
+    1. Checks if file mtime changed.
+    2. If not, returns memory cache.
+    3. If changed, tries to load from Pickle.
+    4. If Pickle stale or missing, loads Excel (Slowest).
+    """
     import pandas as pd
-    global CACHED_DF, LAST_MOD_TIME
+    global CUSTOMER_INDEX
+    
     try:
         if not os.path.exists(EXCEL_FILE):
             print(f"Excel file not found: {EXCEL_FILE}")
-            return pd.DataFrame()
+            return {}
             
         current_mtime = os.path.getmtime(EXCEL_FILE)
         
-        # 1. In-Memory
-        if CACHED_DF is not None and current_mtime == LAST_MOD_TIME:
-            return CACHED_DF
+        # 1. Memory Check
+        if CUSTOMER_INDEX['data'] and CUSTOMER_INDEX['last_mod'] == current_mtime:
+            return CUSTOMER_INDEX['data']
 
-        # 2. Pickle Cache (Disk)
+        # 2. Pickle Cache Check (Disk)
         if os.path.exists(CACHE_FILE):
-            # Check if cache is strictly newer than excel
             if os.path.getmtime(CACHE_FILE) >= current_mtime:
                 try:
                     df = pd.read_pickle(CACHE_FILE)
-                    CACHED_DF = df
-                    LAST_MOD_TIME = current_mtime
-                    return df
+                    # Even if we read pickle, we should rebuild the index in memory for speed
+                    print("Rebuilding mobile index from Pickle...")
+                    index = rebuild_index(df)
+                    CUSTOMER_INDEX['data'] = index
+                    CUSTOMER_INDEX['last_mod'] = current_mtime
+                    return index
                 except Exception as e:
-                    print(f"Cache load failed: {e}")
+                    print(f"Pickle load/index failed: {e}")
 
-        # 3. Fresh Load (Optimized)
-        print("Loading Excel with optimization...")
-        
-        # Define critical columns to reduce memory
-        # Based on file structure: 
-        # ['Date', 'Invoice No', 'OSID', 'Customer', 'Store Name', 'Serial No', 'Category', 'Brand', 'Model', 
-        #  'Plan Type', 'Item Rate', 'Onsite Plan Price', 'myG Plan Price', 'Mobile No', ...]
+        # 3. Fresh Excel Load (Slowest)
+        print("Loading Excel with optimization (fetching only required columns)...")
+        start_t = time.time()
         
         cols_to_use = [
             'Customer', 'Mobile No', 'Invoice No', 'Store Name', 
             'Model', 'Serial No', 'OSID', 'Date'
         ]
         
+        # Try exact column match first
         try:
-            df = pd.read_excel(
-                EXCEL_FILE, 
-                usecols=lambda x: x in cols_to_use, 
-                engine='openpyxl'
-            )
-        except ValueError:
-            # Fallback if columns don't match exactly (e.g. slight name diffs)
-            print("Optimized load failed, falling back to full load")
+            df = pd.read_excel(EXCEL_FILE, usecols=cols_to_use, engine='openpyxl')
+        except:
+            # Fallback: load all then pick
             df = pd.read_excel(EXCEL_FILE, engine='openpyxl')
         
         # Normalize headers
-        df.columns = (
-            df.columns.astype(str)
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        
+        # Find mobile column
+        mob_col = None
+        for c in df.columns:
+            if "mobile" in c or "phone" in c:
+                mob_col = c
+                break
+        
+        if not mob_col:
+            print("Error: No mobile column found")
+            return {}
+
+        # Cleanup mobile data
+        df = df.dropna(subset=[mob_col])
+        df['target_mobile_str'] = (
+            df[mob_col]
+            .astype(str)
+            .str.replace(r'\.0$', '', regex=True)
             .str.strip()
-            .str.replace("\u00A0", " ")
-            .str.lower()
-            .str.replace(r"\s+", " ", regex=True)
         )
         
-        # Optimized Mobile Column Logic
-        # We know the column is likely 'mobile no' based on inspection
-        if 'mobile no' in df.columns:
-            # Drop NaN and convert to string efficiently
-            df = df.dropna(subset=['mobile no'])
-            df['target_mobile_str'] = (
-                df['mobile no']
-                .astype(str)
-                .str.replace(r'\.0$', '', regex=True)
-                .str.strip()
-            )
-        else:
-            # Fallback scan
-            for c in df.columns:
-                if "mobile" in c or "phone" in c:
-                    df = df.dropna(subset=[c])
-                    df['target_mobile_str'] = (
-                        df[c]
-                        .astype(str)
-                        .str.replace(r'\.0$', '', regex=True)
-                        .str.strip()
-                    )
-                    break
-
-        if 'target_mobile_str' not in df.columns:
-            print("Warning: Mobile column not found in Excel")
-
-        # Save Cache
-        try:
-            df.to_pickle(CACHE_FILE)
-            CACHED_DF = df
-            LAST_MOD_TIME = current_mtime
-        except Exception as e:
-            print(f"Failed to write cache: {e}")
-            
-        return df
+        # Save to Pickle for next time
+        df.to_pickle(CACHE_FILE)
+        
+        # Build Index
+        index = rebuild_index(df)
+        CUSTOMER_INDEX['data'] = index
+        CUSTOMER_INDEX['last_mod'] = current_mtime
+        
+        print(f"Excel Load & Indexing took {time.time() - start_t:.2f}s")
+        return index
 
     except Exception as e:
-        print(f"Excel Load Error: {e}")
+        print(f"Indexing Error: {e}")
         import traceback
         traceback.print_exc()
-        return pd.DataFrame()
+        return {}
+
+def rebuild_index(df):
+    """Converts DataFrame to a dictionary indexed by mobile for instant lookup"""
+    index = {}
+    
+    # Identify key columns
+    name_col = col_lookup(df, ["customer", "customer name"])
+    inv_col = col_lookup(df, ["invoice no", "invoice", "invoice_no"])
+    mod_col = col_lookup(df, ["model"])
+    ser_col = col_lookup(df, ["serial no", "serialno", "serial_no"])
+    osid_col = col_lookup(df, ["osid"])
+    br_col = col_lookup(df, ["store name", "store_name", "branch", "branch name"])
+
+    # Convert to records for faster iteration
+    records = df.to_dict('records')
+    for row in records:
+        mob = str(row.get('target_mobile_str', ''))
+        if not mob: continue
+        
+        if mob not in index:
+            index[mob] = {
+                "name": str(row.get(name_col, "Unknown")),
+                "products": []
+            }
+        
+        index[mob]["products"].append({
+            "invoice": str(row.get(inv_col, "")),
+            "model": str(row.get(mod_col, "")),
+            "serial": str(row.get(ser_col, "")),
+            "osid": str(row.get(osid_col, "")),
+            "branch": str(row.get(br_col, "Main Branch"))
+        })
+    return index
 
 def col_lookup(df, variations):
     for v in variations:
@@ -420,50 +431,22 @@ def lookup_customer():
     mobile = data.get('mobile', '').strip()
     
     if not mobile or len(mobile) != 10:
-        return jsonify({"success": False, "message": "Invalid Number"})
+        return jsonify({"success": False, "message": "Invalid Number (Must be 10 digits)"})
 
-    df = load_excel_data()
-    if df.empty:
-        return jsonify({"success": False, "message": "Data Source Unavailable"})
-
-    # Search
-    if 'target_mobile_str' in df.columns:
-        matches = df[df['target_mobile_str'] == mobile]
-    else:
-        # Fallback
-        mob_col = col_lookup(df, ["mobile no", "mobile", "mobile_no"])
-        if not mob_col:
-             return jsonify({"success": False, "message": "Mobile Column Not Found"})
-        matches = df[df[mob_col].astype(str).str.strip() == mobile]
-
-    if matches.empty:
-        return jsonify({"success": False, "message": "No Customer Found"})
+    # Get Index (Instant if cached in memory)
+    index = load_excel_data()
     
-    customer_name = matches.iloc[0].get(col_lookup(df, ["customer", "customer name"]), "Unknown")
+    customer_data = index.get(mobile)
     
-    products = []
-    inv_col = col_lookup(df, ["invoice no", "invoice", "invoice_no"])
-    mod_col = col_lookup(df, ["model"])
-    ser_col = col_lookup(df, ["serial no", "serialno", "serial_no"])
-    osid_col = col_lookup(df, ["osid"])
-    branch_col = col_lookup(df, ["store name", "store_name", "branch", "branch name"])
-
-    for idx, row in matches.iterrows():
-        products.append({
-            "idx": idx, 
-            "invoice": str(row.get(inv_col, "")),
-            "model": str(row.get(mod_col, "")),
-            "serial": str(row.get(ser_col, "")),
-            "osid": str(row.get(osid_col, "")),
-            "branch": str(row.get(branch_col, "Main Branch")), 
-            "display": f"{row.get(mod_col, '')} (OSID: {row.get(osid_col, '')})"
-        })
-
+    if not customer_data:
+        return jsonify({"success": False, "message": "New Customer (Not found in database)"})
+    
     return jsonify({
         "success": True, 
-        "customer_name": str(customer_name),
-        "products": products
+        "customer_name": customer_data["name"],
+        "products": customer_data["products"]
     })
+
 def send_email_notification(claim_data, files=None):
     try:
         msg = MIMEMultipart()

@@ -36,7 +36,9 @@ async function fetchWithTimeout(resource, options = {}) {
 window.selectedProducts = [];
 
 async function searchCustomer() {
-    const mobile = document.getElementById('mobileInput').value;
+    const mobileInput = document.getElementById('mobileInput');
+    const searchBtn = document.getElementById('searchBtn');
+    const mobile = mobileInput.value;
     const msgBox = document.getElementById('search-msg');
     const formSection = document.getElementById('claim-form-section');
 
@@ -47,10 +49,16 @@ async function searchCustomer() {
         return;
     }
 
-    // Show loading
+    // Show loading & Disable inputs
     msgBox.textContent = "Searching Database...";
     msgBox.className = "msg-box info";
     msgBox.classList.remove('hidden');
+
+    // UI Feedback
+    mobileInput.disabled = true;
+    searchBtn.disabled = true;
+    const originalBtnText = searchBtn.innerHTML;
+    searchBtn.innerHTML = '<i class="ri-loader-4-line spin"></i> Searching...';
 
     // Reset selection
     window.selectedProducts = [];
@@ -62,6 +70,7 @@ async function searchCustomer() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ mobile: mobile })
         });
+
         const data = await response.json();
 
         msgBox.classList.add('hidden');
@@ -143,6 +152,10 @@ async function searchCustomer() {
         msgBox.className = "msg-box error";
         msgBox.classList.remove('hidden');
         console.error(e);
+    } finally {
+        mobileInput.disabled = false;
+        searchBtn.disabled = false;
+        searchBtn.innerHTML = originalBtnText;
     }
 }
 
