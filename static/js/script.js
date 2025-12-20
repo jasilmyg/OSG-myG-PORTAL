@@ -432,6 +432,7 @@ function checkStatusUI() {
     const GrpSubmitted = document.getElementById('grp-submitted');
     const GrpOsid = document.getElementById('grp-osid');
     const GrpSrNo = document.getElementById('grp-srno');
+    const wfSectionFollowUp = document.getElementById('wf-section-followup');
 
     // Controls
     const btnSave = document.getElementById('btn-save-changes');
@@ -473,14 +474,19 @@ function checkStatusUI() {
         }
 
     } else if (isFollowUp || status === 'Closed') {
-        // Mode 2: Follow Up OR Closed (Notes Only)
+        // Mode 2: Follow Up OR Closed (Now inside Workflow section)
         if (tabsContainer) tabsContainer.classList.add('hidden');
 
-        switchTab('notes'); // Force Follow Up Tab
+        switchTab('workflow'); // Force Workflow Tab instead of Notes
 
-        // Ensure Visibility
-        if (TabNotes) TabNotes.classList.remove('hidden');
-        if (TabWorkflow) TabWorkflow.classList.add('hidden');
+        // Ensure Visibility of Workflow Tab Only
+        if (TabWorkflow) TabWorkflow.classList.remove('hidden');
+        if (TabNotes) TabNotes.classList.add('hidden');
+
+        // Toggle Subsections: Only show Follow Up history
+        if (wfSectionRepair) wfSectionRepair.classList.add('hidden');
+        if (wfSectionRepl) wfSectionRepl.classList.add('hidden');
+        if (wfSectionFollowUp) wfSectionFollowUp.classList.remove('hidden');
 
         // Controls
         if (btnSave) btnSave.classList.remove('hidden');
@@ -488,9 +494,6 @@ function checkStatusUI() {
         // Follow Up Date: Today (IST), Readonly
         const followUpDateInput = document.getElementById('followUpDate');
         if (followUpDateInput) {
-            // Only set date to today if it's Follow Up or if we want to record the note date
-            // For Closed, maybe we just want to see history? 
-            // But if they type a new note, it needs a date.
             followUpDateInput.value = getISTDate();
             followUpDateInput.setAttribute('readonly', true);
         }
@@ -511,6 +514,7 @@ function checkStatusUI() {
         // Toggle Subsections
         if (wfSectionRepair) wfSectionRepair.classList.remove('hidden');
         if (wfSectionRepl) wfSectionRepl.classList.add('hidden');
+        if (wfSectionFollowUp) wfSectionFollowUp.classList.add('hidden'); // Hide follow up here
 
         // Controls
         if (btnSave) btnSave.classList.remove('hidden');

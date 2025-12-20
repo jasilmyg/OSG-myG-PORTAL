@@ -835,6 +835,17 @@ function openAnalyticsModal(claimId) {
                 <div class="step-status">Done</div>
             </div>
          `;
+    } else if (claim.status === 'Follow Up') {
+        stepsHtml = `
+            <div class="step-item" style="flex-direction: column; align-items: flex-start; gap: 0.5rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; color: var(--primary); font-weight: 600;">
+                    <i class="ri-history-line"></i> Follow Up History
+                </div>
+                <div style="width: 100%; max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.03); padding: 0.8rem; border-radius: 8px; white-space: pre-wrap; font-size: 0.9rem; border: 1px solid rgba(0,0,0,0.05);">
+                    ${claim.follow_up_notes || 'No history available'}
+                </div>
+            </div>
+        `;
     } else {
         stepsHtml = `<div style="color: #666; font-style: italic;">No active workflow for status: ${claim.status}</div>`;
     }

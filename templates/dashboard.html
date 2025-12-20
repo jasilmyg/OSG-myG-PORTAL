@@ -115,7 +115,6 @@
         <div class="tabs">
             <button class="tab-btn" id="btn-tab-info" onclick="switchTab('info')">Info</button>
             <button class="tab-btn" id="btn-tab-workflow" onclick="switchTab('workflow')">Workflow</button>
-            <button class="tab-btn" id="btn-tab-notes" onclick="switchTab('notes')">Follow Up</button>
         </div>
 
         <div id="tab-info" class="tab-content active">
@@ -288,24 +287,25 @@
                         </div>
                     </div>
 
-                    <!-- Save Button Removed (Using Global Save) -->
-                </div>
-                <!-- End Enhanced Workflow Section -->
-            </div>
-        </div>
+                    <!-- Follow Up Section -->
+                    <div id="wf-section-followup" class="hidden" style="margin-top: 20px;">
+                        <div class="workflow-title" style="margin-bottom: 20px;">Workflow Status: Follow Up</div>
 
-        <div id="tab-notes" class="tab-content">
-            <div class="field-group">
-                <label>Follow Up Date</label>
-                <input type="date" id="followUpDate">
-            </div>
-            <div class="field-group">
-                <label>History</label>
-                <textarea id="followUpHistory" rows="6" readonly class="read-only-field"></textarea>
-            </div>
-            <div class="field-group">
-                <label>Add New Note</label>
-                <textarea id="newFollowUpNote" rows="3" placeholder="Enter new follow up details here..."></textarea>
+                        <div class="field-group">
+                            <label>Follow Up Date</label>
+                            <input type="date" id="followUpDate">
+                        </div>
+                        <div class="field-group">
+                            <label>History</label>
+                            <textarea id="followUpHistory" rows="6" readonly class="read-only-field"></textarea>
+                        </div>
+                        <div class="field-group">
+                            <label>Add New Note</label>
+                            <textarea id="newFollowUpNote" rows="3"
+                                placeholder="Enter new follow up details here..."></textarea>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
