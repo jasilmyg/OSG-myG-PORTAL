@@ -215,7 +215,7 @@ class ClaimWrapper:
             return True
         
         # Check if all replacement workflow steps are completed
-        if status == "replacement approved":
+        if "replacement" in status and "approved" in status:
             all_steps_done = (
                 self.cust_confirmation_pending and
                 self.approval_mail_received and
