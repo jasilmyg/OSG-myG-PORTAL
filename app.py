@@ -16,6 +16,7 @@ import io
 import re
 from collections import defaultdict
 from flask import send_file
+import threading
 
 # ----------------------
 # CONFIG
@@ -313,24 +314,34 @@ def load_excel_data():
         
         # 1. Memory Check
         if CUSTOMER_INDEX['data'] and CUSTOMER_INDEX['last_mod'] == current_mtime:
+            print(f"[CACHE] Using In-Memory Cache (Fastest). Index Size: {len(CUSTOMER_INDEX['data'])}")
             return CUSTOMER_INDEX['data']
+
+        print(f"[CACHE] File changed (or memory empty). Last Mod: {CUSTOMER_INDEX['last_mod']} vs Current: {current_mtime}")
 
         # 2. Pickle Cache Check (Disk)
         if os.path.exists(CACHE_FILE):
             if os.path.getmtime(CACHE_FILE) >= current_mtime:
                 try:
+                    print("[CACHE] Loading from Pickle (Fast)...")
+                    t0 = time.time()
                     df = pd.read_pickle(CACHE_FILE)
+                    print(f"[CACHE] Pickle Load took {time.time() - t0:.2f}s")
+                    
                     # Even if we read pickle, we should rebuild the index in memory for speed
                     print("Rebuilding mobile index from Pickle...")
+                    t1 = time.time()
                     index = rebuild_index(df)
+                    print(f"[CACHE] Index Rebuild took {time.time() - t1:.2f}s")
+                    
                     CUSTOMER_INDEX['data'] = index
                     CUSTOMER_INDEX['last_mod'] = current_mtime
                     return index
                 except Exception as e:
-                    print(f"Pickle load/index failed: {e}")
+                    print(f"[CACHE] Pickle load/index failed: {e}")
 
         # 3. Fresh Excel Load (Slowest)
-        print("Loading Excel with optimization (fetching only required columns)...")
+        print("[CACHE] MISS! Loading Fresh Excel (Slow)...")
         start_t = time.time()
         
         cols_to_use = [
@@ -369,6 +380,7 @@ def load_excel_data():
         )
         
         # Save to Pickle for next time
+        print("[CACHE] Saving new Pickle...")
         df.to_pickle(CACHE_FILE)
         
         # Build Index
@@ -376,7 +388,7 @@ def load_excel_data():
         CUSTOMER_INDEX['data'] = index
         CUSTOMER_INDEX['last_mod'] = current_mtime
         
-        print(f"Excel Load & Indexing took {time.time() - start_t:.2f}s")
+        print(f"[CACHE] Total Excel Load & Indexing took {time.time() - start_t:.2f}s")
         return index
 
     except Exception as e:
@@ -1732,6 +1744,24 @@ def map_data():
         traceback.print_exc()
         flash(f"Mapping Failed: {str(e)}", "error")
         return redirect(url_for('reports_tools'))
+
+# ----------------------
+# STARTUP TASKS
+# ----------------------
+def preload_data():
+    """Background task to load data into memory on server start"""
+    with app.app_context():
+        print("[STARTUP] Pre-loading customer data...")
+        try:
+            load_excel_data()
+            print("[STARTUP] Customer data pre-loaded successfully.")
+        except Exception as e:
+            print(f"[STARTUP] Pre-load failed: {e}")
+
+# Start background thread for pre-loading
+# checking if not in reloader to avoid double load in debug mode
+if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
+    threading.Thread(target=preload_data).start()
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
