@@ -294,102 +294,155 @@ CUSTOMER_INDEX = {
     'last_mod': 0
 }
 
+# Lock for cache updates to prevent race conditions during write
+CACHE_LOCK = threading.Lock()
+REFRESH_THREAD_RUNNING = False
+
+def _refresh_cache_from_excel_background():
+    """Background worker to reload Excel and update cache"""
+    global CUSTOMER_INDEX, REFRESH_THREAD_RUNNING
+    
+    with app.app_context(): # Ensure context if needed
+        try:
+            print("[BG-CACHE] Starting background refresh...")
+            
+            if not os.path.exists(EXCEL_FILE):
+                print(f"[BG-CACHE] Excel file not found: {EXCEL_FILE}")
+                REFRESH_THREAD_RUNNING = False
+                return
+
+            current_mtime = os.path.getmtime(EXCEL_FILE)
+            start_t = time.time()
+            
+            import pandas as pd
+            cols_to_use = [
+                'Customer', 'Mobile No', 'Invoice No', 'Store Name', 
+                'Model', 'Serial No', 'OSID', 'Date'
+            ]
+            
+            # Load Excel (Slow operation)
+            try:
+                df = pd.read_excel(EXCEL_FILE, usecols=cols_to_use, engine='openpyxl')
+            except:
+                df = pd.read_excel(EXCEL_FILE, engine='openpyxl')
+            
+            # Normalize
+            df.columns = [str(c).strip().lower() for c in df.columns]
+            
+            mob_col = None
+            for c in df.columns:
+                if "mobile" in c or "phone" in c:
+                    mob_col = c
+                    break
+            
+            if not mob_col:
+                print("[BG-CACHE] Error: No mobile column found")
+                REFRESH_THREAD_RUNNING = False
+                return
+
+            df = df.dropna(subset=[mob_col])
+            df['target_mobile_str'] = (
+                df[mob_col]
+                .astype(str)
+                .str.replace(r'\.0$', '', regex=True)
+                .str.strip()
+            )
+            
+            # Build Index
+            index = rebuild_index(df)
+            
+            # Save new Pickle (DIRECT INDEX CACHE)
+            print("[BG-CACHE] Saving Index to Pickle (Optimized)...")
+            import pickle
+            with open(CACHE_FILE, 'wb') as f:
+                pickle.dump(index, f)
+            
+            # Update Global Cache safely
+            with CACHE_LOCK:
+                CUSTOMER_INDEX['data'] = index
+                CUSTOMER_INDEX['last_mod'] = current_mtime
+            
+            print(f"[BG-CACHE] Refresh Complete. Took {time.time() - start_t:.2f}s. New Size: {len(index)}")
+            
+        except Exception as e:
+            print(f"[BG-CACHE] Failed: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            REFRESH_THREAD_RUNNING = False
+
 def load_excel_data():
     """
-    Optimized loader: 
-    1. Checks if file mtime changed.
-    2. If not, returns memory cache.
-    3. If changed, tries to load from Pickle.
-    4. If Pickle stale or missing, loads Excel (Slowest).
+    Super-Optimized 'Stale-While-Revalidate' Loader:
+    1. Returns In-Memory Cache INSTANTLY.
+    2. Returns Pickle Cache INSTANTLY (Direct Dict Load - No Processing).
+    3. Checks freshness in background.
     """
     import pandas as pd
-    global CUSTOMER_INDEX
+    import pickle
+    global CUSTOMER_INDEX, REFRESH_THREAD_RUNNING
     
     try:
         if not os.path.exists(EXCEL_FILE):
-            print(f"Excel file not found: {EXCEL_FILE}")
-            return {}
-            
+             print(f"Excel file missing")
+             return {}
+
         current_mtime = os.path.getmtime(EXCEL_FILE)
         
-        # 1. Memory Check
-        if CUSTOMER_INDEX['data'] and CUSTOMER_INDEX['last_mod'] == current_mtime:
-            print(f"[CACHE] Using In-Memory Cache (Fastest). Index Size: {len(CUSTOMER_INDEX['data'])}")
+        # Helper to trigger refresh
+        def trigger_refresh_if_needed(last_known_mod):
+            global REFRESH_THREAD_RUNNING
+            if last_known_mod != current_mtime:
+                # Cache is stale
+                if not REFRESH_THREAD_RUNNING:
+                    print(f"[CACHE] Data Stale (Mem/Pickle: {last_known_mod} vs File: {current_mtime}). Triggering Background Refresh...")
+                    REFRESH_THREAD_RUNNING = True
+                    threading.Thread(target=_refresh_cache_from_excel_background).start()
+                else:
+                    print("[CACHE] Data Stale, but refresh already running.")
+            else:
+                 pass # Data fresh
+
+        # 1. In-Memory Check (Fastest)
+        if CUSTOMER_INDEX['data']:
+            # print(f"[CACHE] INSTANT: Returning In-Memory Cache.") # Too noisy
+            # Check for staleness in background (pseudo, we just trigger thread)
+            trigger_refresh_if_needed(CUSTOMER_INDEX['last_mod'])
             return CUSTOMER_INDEX['data']
 
-        print(f"[CACHE] File changed (or memory empty). Last Mod: {CUSTOMER_INDEX['last_mod']} vs Current: {current_mtime}")
-
-        # 2. Pickle Cache Check (Disk)
+        # 2. Pickle Check (Fast - Direct Dict Load)
         if os.path.exists(CACHE_FILE):
-            if os.path.getmtime(CACHE_FILE) >= current_mtime:
-                try:
-                    print("[CACHE] Loading from Pickle (Fast)...")
-                    t0 = time.time()
-                    df = pd.read_pickle(CACHE_FILE)
-                    print(f"[CACHE] Pickle Load took {time.time() - t0:.2f}s")
-                    
-                    # Even if we read pickle, we should rebuild the index in memory for speed
-                    print("Rebuilding mobile index from Pickle...")
-                    t1 = time.time()
-                    index = rebuild_index(df)
-                    print(f"[CACHE] Index Rebuild took {time.time() - t1:.2f}s")
-                    
+            try:
+                print("[CACHE] Reading Pickle Index...")
+                t0 = time.time()
+                
+                with open(CACHE_FILE, 'rb') as f:
+                    index = pickle.load(f)
+                
+                # Check if it's actually a dict (migration safety)
+                if not isinstance(index, dict):
+                    print("[CACHE] Detected legacy DataFrame pickle. Ignoring/Upgrading in background.")
+                    raise ValueError("Legacy Cache")
+
+                pickle_mtime = os.path.getmtime(CACHE_FILE) 
+                
+                with CACHE_LOCK:
                     CUSTOMER_INDEX['data'] = index
-                    CUSTOMER_INDEX['last_mod'] = current_mtime
-                    return index
-                except Exception as e:
-                    print(f"[CACHE] Pickle load/index failed: {e}")
+                    CUSTOMER_INDEX['last_mod'] = pickle_mtime 
+                
+                print(f"[CACHE] INSTANT: Loaded Dictionary Index in {time.time() - t0:.4f}s.")
+                
+                # Check timestamp freshness against EXCEL
+                trigger_refresh_if_needed(pickle_mtime)
+                
+                return index
+            except Exception as e:
+                print(f"[CACHE] Pickle Read Failed (Will rebuild): {e}")
 
-        # 3. Fresh Excel Load (Slowest)
-        print("[CACHE] MISS! Loading Fresh Excel (Slow)...")
-        start_t = time.time()
-        
-        cols_to_use = [
-            'Customer', 'Mobile No', 'Invoice No', 'Store Name', 
-            'Model', 'Serial No', 'OSID', 'Date'
-        ]
-        
-        # Try exact column match first
-        try:
-            df = pd.read_excel(EXCEL_FILE, usecols=cols_to_use, engine='openpyxl')
-        except:
-            # Fallback: load all then pick
-            df = pd.read_excel(EXCEL_FILE, engine='openpyxl')
-        
-        # Normalize headers
-        df.columns = [str(c).strip().lower() for c in df.columns]
-        
-        # Find mobile column
-        mob_col = None
-        for c in df.columns:
-            if "mobile" in c or "phone" in c:
-                mob_col = c
-                break
-        
-        if not mob_col:
-            print("Error: No mobile column found")
-            return {}
-
-        # Cleanup mobile data
-        df = df.dropna(subset=[mob_col])
-        df['target_mobile_str'] = (
-            df[mob_col]
-            .astype(str)
-            .str.replace(r'\.0$', '', regex=True)
-            .str.strip()
-        )
-        
-        # Save to Pickle for next time
-        print("[CACHE] Saving new Pickle...")
-        df.to_pickle(CACHE_FILE)
-        
-        # Build Index
-        index = rebuild_index(df)
-        CUSTOMER_INDEX['data'] = index
-        CUSTOMER_INDEX['last_mod'] = current_mtime
-        
-        print(f"[CACHE] Total Excel Load & Indexing took {time.time() - start_t:.2f}s")
-        return index
+        # 3. Blocking Fallback (First Run Only)
+        print("[CACHE] BLOCKING: No valid cache. Loading Excel synchronously...")
+        _refresh_cache_from_excel_background()
+        return CUSTOMER_INDEX['data']
 
     except Exception as e:
         print(f"Indexing Error: {e}")
