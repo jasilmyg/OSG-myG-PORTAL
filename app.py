@@ -847,6 +847,10 @@ def update_claim(id):
         print(f"Update Sync Error: {e}")
         return jsonify({"success": False})
 
+    # Invalidate Cache so next fetch gets fresh data
+    global CLAIMS_CACHE
+    CLAIMS_CACHE['last_updated'] = 0
+
     return jsonify({"success": True})
 
 def sync_to_google_sheet_dict(payload):
