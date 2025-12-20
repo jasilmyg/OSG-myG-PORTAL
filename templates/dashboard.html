@@ -42,7 +42,13 @@
         <div class="icon-box purple"><i class="ri-store-2-line"></i></div>
         <div class="stat-info">
             <h3>Avg TAT</h3>
-            <span class="number">-- Days</span>
+            <span class="number">
+                {% if avg_tat is not none %}
+                {{ avg_tat }} Days
+                {% else %}
+                -- Days
+                {% endif %}
+            </span>
         </div>
     </div>
 </div>

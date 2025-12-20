@@ -210,7 +210,26 @@ class ClaimWrapper:
     def assigned_staff(self): return self.data.get("Assigned Staff")
     
     @property
-    def tat(self): return self.data.get("Settled Time (TAT)")
+    def tat(self):
+        """Calculate TAT (Turnaround Time) in days"""
+        # Return sheet value if it exists
+        sheet_tat = self.data.get("Settled Time (TAT)")
+        if sheet_tat and str(sheet_tat).strip() and str(sheet_tat) != 'nan':
+            try:
+                return int(float(sheet_tat))
+            except:
+                pass
+        
+        # Otherwise calculate it
+        if self.claim_settled_date and (self.data.get("Date") or self.data.get("Submitted Date")):
+            try:
+                s_date = self.data.get("Date") or self.data.get("Submitted Date")
+                submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%m-%d')
+                settled = datetime.datetime.strptime(str(self.claim_settled_date).split()[0], '%Y-%m-%d')
+                return (settled - submitted).days
+            except Exception as e:
+                return None
+        return None
     
 # ----------------------
 # HELPER FUNCTIONS
@@ -284,7 +303,11 @@ def dashboard():
     pending = len([c for c in claims if not c.complete])
     completed = len([c for c in claims if c.complete])
     
-    return render_template('dashboard.html', claims=claims, total=total, pending=pending, completed=completed)
+    # Calculate average TAT for completed claims
+    tats = [c.tat for c in claims if c.tat is not None and c.complete]
+    avg_tat = round(sum(tats) / len(tats)) if tats else None
+    
+    return render_template('dashboard.html', claims=claims, total=total, pending=pending, completed=completed, avg_tat=avg_tat)
 
 @app.route('/health')
 def health_check():
