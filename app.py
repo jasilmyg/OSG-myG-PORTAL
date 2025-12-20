@@ -828,7 +828,9 @@ def update_claim(id):
 
     # CRITICAL: Mutual exclusivity of workflows
     # If status is 'Repair Completed', clear all Replacement Workflow data
-    if payload.get("Status") == "Repair Completed":
+    status_lower = (payload.get("Status") or "").strip().lower()
+    
+    if status_lower == "repair completed":
         payload["Confirmation Pending From Customer (Yes/No)"] = ""
         payload["Approval Mail Received From Onsitego (Yes/No)"] = ""
         payload["Mail Sent To Store (Yes/No)"] = ""
@@ -837,7 +839,7 @@ def update_claim(id):
         payload["Settled With Accounts (Yes/No)"] = ""
     
     # If status is 'Replacement Approved', clear Repair Workflow data
-    if payload.get("Status") == "Replacement Approved":
+    if "replacement" in status_lower and "approved" in status_lower:
         payload["Repair Feedback Completed (Yes/No)"] = ""
 
     # Sync
