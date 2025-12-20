@@ -219,7 +219,7 @@ CLAIMS_CACHE = {
     'data': [],
     'last_updated': 0
 }
-CACHE_DURATION = 120  # 2 minutes cache
+CACHE_DURATION = 30  # 30 seconds cache - faster sync with sheet changes
 
 def get_ist_now():
     return datetime.datetime.now(pytz.timezone('Asia/Kolkata'))
