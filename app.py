@@ -498,19 +498,22 @@ def lookup_customer():
     if not mobile or len(mobile) != 10:
         return jsonify({"success": False, "message": "Invalid Number (Must be 10 digits)"})
 
-    # Get Index (Instant if cached in memory)
+    # Get Index (Triggers stale checks if needed)
     index = load_excel_data()
     
     customer_data = index.get(mobile)
     
-    if not customer_data:
-        return jsonify({"success": False, "message": "New Customer (Not found in database)"})
-    
-    return jsonify({
-        "success": True, 
-        "customer_name": customer_data["name"],
-        "products": customer_data["products"]
-    })
+    if customer_data:
+        return jsonify({
+            "success": True,
+            "customer_name": customer_data['name'],
+            "products": customer_data['products']
+        })
+    else:
+        print(f"[LOOKUP FAIL] Mobile: {mobile} | Index Size: {len(index)}")
+        if index:
+             print(f"[LOOKUP DEBUG] Sample Keys: {list(index.keys())[:5]}")
+        return jsonify({"success": False})
 
 def send_email_notification(claim_data, files=None):
     try:
