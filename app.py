@@ -815,12 +815,57 @@ def update_claim(id):
     
     if 'repair_feedback_completed' in data: payload["Repair Feedback Completed (Yes/No)"] = fmt_bool(data['repair_feedback_completed'])
     
+    # Find existing claim to check for existing dates
+    all_claims = fetch_claims_from_sheet()
+    existing_claim = next((c for c in all_claims if str(c.claim_id) == str(id)), None)
+    
+    import datetime
+    import pytz
+    
+    # Get current time in IST
+    ist = pytz.timezone('Asia/Kolkata')
+    today_str = datetime.datetime.now(ist).strftime('%d-%m-%Y')
+
+    def should_update_date(key_bool, existing_date_val):
+        # Update date if: Checkbox is TRUE AND (Existing Date is Empty/None)
+        is_checked = data.get(key_bool)
+        if is_checked:
+            if not existing_date_val or str(existing_date_val).strip() == '':
+                return True
+        return False
+
     # Replacement workflow fields (Columns O-T) - Use actual sheet column names
     if 'replacement_confirmation' in data: payload["Customer Confirmation"] = fmt_bool(data['replacement_confirmation'])
-    if 'replacement_osg_approval' in data: payload["Approval Mail Received From Onsitego (Yes/No)"] = fmt_bool(data['replacement_osg_approval'])
-    if 'replacement_mail_store' in data: payload["Mail Sent To Store (Yes/No)"] = fmt_bool(data['replacement_mail_store'])
-    if 'replacement_invoice_gen' in data: payload["Invoice Generated (Yes/No)"] = fmt_bool(data['replacement_invoice_gen'])
-    if 'replacement_invoice_sent' in data: payload["Invoice Sent To Onsitego (Yes/No)"] = fmt_bool(data['replacement_invoice_sent'])
+    
+    # Auto-date logic for: Approval Mail
+    if 'replacement_osg_approval' in data: 
+        payload["Approval Mail Received From Onsitego (Yes/No)"] = fmt_bool(data['replacement_osg_approval'])
+        # Check if we need to set date
+        existing_date = existing_claim.approval_mail_date if existing_claim else None
+        if should_update_date('replacement_osg_approval', existing_date):
+             payload["Approval Mail Received Date"] = today_str
+
+    # Auto-date logic for: Mail Sent To Store
+    if 'replacement_mail_store' in data: 
+        payload["Mail Sent To Store (Yes/No)"] = fmt_bool(data['replacement_mail_store'])
+        existing_date = existing_claim.mail_sent_to_store_date if existing_claim else None
+        if should_update_date('replacement_mail_store', existing_date):
+             payload["Mail Sent To Store Date"] = today_str
+
+    # Auto-date logic for: Invoice Generated
+    if 'replacement_invoice_gen' in data: 
+        payload["Invoice Generated (Yes/No)"] = fmt_bool(data['replacement_invoice_gen'])
+        existing_date = existing_claim.invoice_generated_date if existing_claim else None
+        if should_update_date('replacement_invoice_gen', existing_date):
+             payload["Invoice Generated Date"] = today_str
+
+    # Auto-date logic for: Invoice Sent To Onsitego
+    if 'replacement_invoice_sent' in data: 
+        payload["Invoice Sent To Onsitego (Yes/No)"] = fmt_bool(data['replacement_invoice_sent'])
+        existing_date = existing_claim.invoice_sent_osg_date if existing_claim else None
+        if should_update_date('replacement_invoice_sent', existing_date):
+            payload["Invoice Sent To Onsitego Date"] = today_str
+
     if 'replacement_settled_accounts' in data: payload["Settled With Accounts (Yes/No)"] = fmt_bool(data['replacement_settled_accounts'])
     
     # Complete flag
