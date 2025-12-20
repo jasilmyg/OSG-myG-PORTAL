@@ -180,7 +180,7 @@ class ClaimWrapper:
 
     @property
     def cust_confirmation_pending(self): 
-        return self._bool("Replacement: Confirmation Pending") or self._bool("Confirmation Pending From Customer (Yes/No)")
+        return self._bool("Replacement: Confirmation Pending") or self._bool("Customer Confirmation")
     
     @property
     def approval_mail_received(self): 
@@ -772,7 +772,7 @@ def get_claim(id):
         "repair_feedback_completed": found.repair_feedback_completed,
         
         # Replacement workflow fields (Columns O-T) - Use actual sheet column names
-        "replacement_confirmation": parse_bool(found.data.get("Confirmation Pending From Customer (Yes/No)")),
+        "replacement_confirmation": parse_bool(found.data.get("Customer Confirmation")),
         "replacement_osg_approval": parse_bool(found.data.get("Approval Mail Received From Onsitego (Yes/No)")),
         "replacement_mail_store": parse_bool(found.data.get("Mail Sent To Store (Yes/No)")),
         "replacement_invoice_gen": parse_bool(found.data.get("Invoice Generated (Yes/No)")),
@@ -816,7 +816,7 @@ def update_claim(id):
     if 'repair_feedback_completed' in data: payload["Repair Feedback Completed (Yes/No)"] = fmt_bool(data['repair_feedback_completed'])
     
     # Replacement workflow fields (Columns O-T) - Use actual sheet column names
-    if 'replacement_confirmation' in data: payload["Confirmation Pending From Customer (Yes/No)"] = fmt_bool(data['replacement_confirmation'])
+    if 'replacement_confirmation' in data: payload["Customer Confirmation"] = fmt_bool(data['replacement_confirmation'])
     if 'replacement_osg_approval' in data: payload["Approval Mail Received From Onsitego (Yes/No)"] = fmt_bool(data['replacement_osg_approval'])
     if 'replacement_mail_store' in data: payload["Mail Sent To Store (Yes/No)"] = fmt_bool(data['replacement_mail_store'])
     if 'replacement_invoice_gen' in data: payload["Invoice Generated (Yes/No)"] = fmt_bool(data['replacement_invoice_gen'])
@@ -831,7 +831,7 @@ def update_claim(id):
     status_lower = (payload.get("Status") or "").strip().lower()
     
     if status_lower == "repair completed":
-        payload["Confirmation Pending From Customer (Yes/No)"] = ""
+        payload["Customer Confirmation"] = ""
         payload["Approval Mail Received From Onsitego (Yes/No)"] = ""
         payload["Mail Sent To Store (Yes/No)"] = ""
         payload["Invoice Generated (Yes/No)"] = ""
@@ -970,7 +970,7 @@ def get_analytics_data():
                 'tat': tat,
                 
                 # Replacement workflow fields (Columns O-T) - Use actual sheet column names
-                'replacement_confirmation': parse_bool(claim.data.get("Confirmation Pending From Customer (Yes/No)")),
+                'replacement_confirmation': parse_bool(claim.data.get("Customer Confirmation")),
                 'replacement_osg_approval': parse_bool(claim.data.get("Approval Mail Received From Onsitego (Yes/No)")),
                 'replacement_mail_store': parse_bool(claim.data.get("Mail Sent To Store (Yes/No)")),
                 'replacement_invoice_gen': parse_bool(claim.data.get("Invoice Generated (Yes/No)")),
