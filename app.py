@@ -729,7 +729,7 @@ def get_claim(id):
         "remarks": found.remarks or "",
         "repair_feedback_completed": found.repair_feedback_completed,
         
-        # Replacement workflow fields (Columns O-T)
+        # Replacement workflow fields (Columns O-T) - Use actual sheet column names
         "replacement_confirmation": parse_bool(found.data.get("Confirmation Pending From Customer (Yes/No)")),
         "replacement_osg_approval": parse_bool(found.data.get("Approval Mail Received From Onsitego (Yes/No)")),
         "replacement_mail_store": parse_bool(found.data.get("Mail Sent To Store (Yes/No)")),
@@ -773,25 +773,25 @@ def update_claim(id):
     
     if 'repair_feedback_completed' in data: payload["Repair Feedback Completed (Yes/No)"] = fmt_bool(data['repair_feedback_completed'])
     
-    # Replacement workflow fields (Columns O-T) - Updated to new Sheet Headers
-    if 'replacement_confirmation' in data: payload["Replacement: Confirmation Pending"] = fmt_bool(data['replacement_confirmation'])
-    if 'replacement_osg_approval' in data: payload["Replacement: OSG Approval"] = fmt_bool(data['replacement_osg_approval'])
-    if 'replacement_mail_store' in data: payload["Replacement: Mail to Store"] = fmt_bool(data['replacement_mail_store'])
-    if 'replacement_invoice_gen' in data: payload["Replacement: Invoice Generated"] = fmt_bool(data['replacement_invoice_gen'])
-    if 'replacement_invoice_sent' in data: payload["Replacement: Invoice Sent to OSG"] = fmt_bool(data['replacement_invoice_sent'])
-    if 'replacement_settled_accounts' in data: payload["Replacement: Settled with Accounts"] = fmt_bool(data['replacement_settled_accounts'])
+    # Replacement workflow fields (Columns O-T) - Use actual sheet column names
+    if 'replacement_confirmation' in data: payload["Confirmation Pending From Customer (Yes/No)"] = fmt_bool(data['replacement_confirmation'])
+    if 'replacement_osg_approval' in data: payload["Approval Mail Received From Onsitego (Yes/No)"] = fmt_bool(data['replacement_osg_approval'])
+    if 'replacement_mail_store' in data: payload["Mail Sent To Store (Yes/No)"] = fmt_bool(data['replacement_mail_store'])
+    if 'replacement_invoice_gen' in data: payload["Invoice Generated (Yes/No)"] = fmt_bool(data['replacement_invoice_gen'])
+    if 'replacement_invoice_sent' in data: payload["Invoice Sent To Onsitego (Yes/No)"] = fmt_bool(data['replacement_invoice_sent'])
+    if 'replacement_settled_accounts' in data: payload["Settled With Accounts (Yes/No)"] = fmt_bool(data['replacement_settled_accounts'])
     
     # Complete flag
     if 'complete' in data: payload["Complete"] = fmt_bool(data['complete'])
 
     # CRITICAL: If status is 'Repair Completed', clear all Replacement Workflow data
     if payload.get("Status") == "Repair Completed":
-        payload["Replacement: Confirmation Pending"] = ""
-        payload["Replacement: OSG Approval"] = ""
-        payload["Replacement: Mail to Store"] = ""
-        payload["Replacement: Invoice Generated"] = ""
-        payload["Replacement: Invoice Sent to OSG"] = ""
-        payload["Replacement: Settled with Accounts"] = ""
+        payload["Confirmation Pending From Customer (Yes/No)"] = ""
+        payload["Approval Mail Received From Onsitego (Yes/No)"] = ""
+        payload["Mail Sent To Store (Yes/No)"] = ""
+        payload["Invoice Generated (Yes/No)"] = ""
+        payload["Invoice Sent To Onsitego (Yes/No)"] = ""
+        payload["Settled With Accounts (Yes/No)"] = ""
 
     # Sync
     try:
@@ -916,7 +916,7 @@ def get_analytics_data():
                 'claim_settled_date': claim.claim_settled_date or '',
                 'tat': tat,
                 
-                # Replacement workflow fields (Columns O-T)
+                # Replacement workflow fields (Columns O-T) - Use actual sheet column names
                 'replacement_confirmation': parse_bool(claim.data.get("Confirmation Pending From Customer (Yes/No)")),
                 'replacement_osg_approval': parse_bool(claim.data.get("Approval Mail Received From Onsitego (Yes/No)")),
                 'replacement_mail_store': parse_bool(claim.data.get("Mail Sent To Store (Yes/No)")),
