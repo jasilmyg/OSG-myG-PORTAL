@@ -38,19 +38,6 @@
             <span class="number">{{ completed }}</span>
         </div>
     </div>
-    <div class="stat-card glass-panel">
-        <div class="icon-box purple"><i class="ri-store-2-line"></i></div>
-        <div class="stat-info">
-            <h3>Avg TAT</h3>
-            <span class="number">
-                {% if avg_tat is not none %}
-                {{ avg_tat }} Days
-                {% else %}
-                -- Days
-                {% endif %}
-            </span>
-        </div>
-    </div>
 </div>
 
 <!-- Claims Table -->
@@ -71,8 +58,6 @@
                     <th>Customer</th>
                     <th>Product</th>
                     <th>Issue</th>
-                    <th>Status</th>
-                    <th>TAT</th>
                     <th>Action</th>
                 </tr>
             </thead>
@@ -98,14 +83,6 @@
                         <span class="status-pill {{ claim.status|lower|replace(' ', '-') }}">
                             {{ claim.status }}
                         </span>
-                    </td>
-                    <td>
-                        {% if claim.tat is not none %}
-                        {{ claim.tat }} Days
-                        {% else %}
-                        -
-                        {% endif %}
-                    </td>
                     <td>
                         <button class="btn-icon" onclick="openClaimModal('{{ claim.claim_id }}')">
                             <i class="ri-edit-2-line"></i>
@@ -278,15 +255,6 @@
                                     onclick="event.stopPropagation(); updateWorkflowProgress()">
                             </div>
                         </div>
-                    </div>
-
-                    <!-- TAT Display -->
-                    <div class="tat-display">
-                        <span class="tat-label">Turn Around Time (TAT):</span>
-                        <span>
-                            <span class="tat-value" id="disp_tat">--</span>
-                            <span class="tat-unit">days</span>
-                        </span>
                     </div>
 
                     <!-- Completion Badge -->

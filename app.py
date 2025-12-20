@@ -313,11 +313,7 @@ def dashboard():
     pending = len([c for c in claims if not c.complete])
     completed = len([c for c in claims if c.complete])
     
-    # Calculate average TAT for completed claims
-    tats = [c.tat for c in claims if c.tat is not None and c.complete]
-    avg_tat = round(sum(tats) / len(tats)) if tats else None
-    
-    return render_template('dashboard.html', claims=claims, total=total, pending=pending, completed=completed, avg_tat=avg_tat)
+    return render_template('dashboard.html', claims=claims, total=total, pending=pending, completed=completed)
 
 @app.route('/health')
 def health_check():
