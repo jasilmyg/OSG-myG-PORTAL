@@ -430,6 +430,8 @@ function checkStatusUI() {
     const GrpSettled = document.getElementById('grp-settled');
     const GrpStaff = document.getElementById('grp-staff');
     const GrpSubmitted = document.getElementById('grp-submitted');
+    const GrpOsid = document.getElementById('grp-osid');
+    const GrpSrNo = document.getElementById('grp-srno');
 
     // Controls
     const btnSave = document.getElementById('btn-save-changes');
@@ -451,6 +453,10 @@ function checkStatusUI() {
         if (GrpSettled) GrpSettled.classList.add('hidden');
         if (GrpStaff) GrpStaff.classList.add('hidden');
         if (GrpSubmitted) GrpSubmitted.classList.remove('hidden');
+
+        // Ensure SR No/OSID visible
+        if (GrpOsid) GrpOsid.classList.remove('hidden');
+        if (GrpSrNo) GrpSrNo.classList.remove('hidden');
 
         // Controls
         if (isRegistered) {
