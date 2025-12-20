@@ -18,6 +18,9 @@ from collections import defaultdict
 from flask import send_file
 import threading
 
+# Performance monitoring
+from perf_utils import timed_excel_read
+
 # ----------------------
 # CONFIG
 # ----------------------
@@ -976,17 +979,17 @@ def generate_report_1():
             flash("Default Store/RBM files not found on server.", "error")
             return redirect(url_for('reports_tools'))
 
-        future_store_df = pd.read_excel(store_list_path)
-        rbm_df = pd.read_excel(rbm_path)
+        future_store_df = timed_excel_read(store_list_path, "Store List", engine='openpyxl')
+        rbm_df = timed_excel_read(rbm_path, "RBM Mapping", engine='openpyxl')
 
         # Process logic from snippet
         # Optimization: Read only needed columns
         # Needed: Branch (->Store), DATE, QUANTITY, AMOUNT
         try:
-             book1_df = pd.read_excel(curr_sales_file, usecols=lambda x: x in ['Branch', 'Store', 'DATE', 'Date', 'QUANTITY', 'AMOUNT'])
+             book1_df = timed_excel_read(curr_sales_file, "Current Sales", usecols=lambda x: x in ['Branch', 'Store', 'DATE', 'Date', 'QUANTITY', 'AMOUNT'], engine='openpyxl')
         except Exception:
              # Fallback if specific columns not found (e.g. typos in headers)
-             book1_df = pd.read_excel(curr_sales_file)
+             book1_df = timed_excel_read(curr_sales_file, "Current Sales (Full)", engine='openpyxl')
 
         book1_df.rename(columns={'Branch': 'Store', 'Date': 'DATE'}, inplace=True)
         book1_df['DATE'] = pd.to_datetime(book1_df['DATE'], dayfirst=True, errors='coerce')
@@ -994,9 +997,9 @@ def generate_report_1():
         rbm_df.rename(columns={'Branch': 'Store'}, inplace=True)
 
         try:
-            product_df = pd.read_excel(product_sales_file, usecols=lambda x: x in ['Branch', 'Store', 'Date', 'DATE', 'Sold Price', 'AMOUNT', 'QUANTITY'])
+            product_df = timed_excel_read(product_sales_file, "Product Sales", usecols=lambda x: x in ['Branch', 'Store', 'Date', 'DATE', 'Sold Price', 'AMOUNT', 'QUANTITY'], engine='openpyxl')
         except:
-            product_df = pd.read_excel(product_sales_file)
+            product_df = timed_excel_read(product_sales_file, "Product Sales (Full)", engine='openpyxl')
             
         product_df.rename(columns={'Branch': 'Store', 'Date': 'DATE', 'Sold Price': 'AMOUNT'}, inplace=True)
         product_df['DATE'] = pd.to_datetime(product_df['DATE'], dayfirst=True, errors='coerce')
@@ -1018,9 +1021,9 @@ def generate_report_1():
 
         try:
             # Needed: Branch, DATE, AMOUNT
-            prev_df = pd.read_excel(prev_sales_file, usecols=lambda x: x in ['Branch', 'Store', 'DATE', 'Date', 'AMOUNT'])
+            prev_df = timed_excel_read(prev_sales_file, "Previous Sales", usecols=lambda x: x in ['Branch', 'Store', 'DATE', 'Date', 'AMOUNT'], engine='openpyxl')
         except:
-             prev_df = pd.read_excel(prev_sales_file)
+             prev_df = timed_excel_read(prev_sales_file, "Previous Sales (Full)", engine='openpyxl')
 
         prev_df.rename(columns={'Branch': 'Store', 'Date': 'DATE'}, inplace=True)
         prev_df['DATE'] = pd.to_datetime(prev_df['DATE'], dayfirst=True, errors='coerce')
@@ -1513,9 +1516,9 @@ def generate_report_2():
              flash("Future Store List.xlsx not found on server.", "error")
              return redirect(url_for('reports_tools'))
              
-        future_df = pd.read_excel(future_path) 
+        future_df = timed_excel_read(future_path, "Future Store List", engine='openpyxl') 
 
-        book2_df = pd.read_excel(book2_file)
+        book2_df = timed_excel_read(book2_file, "Sales Data", engine='openpyxl')
         book2_df.rename(columns={'Branch': 'Store'}, inplace=True)
         
         agg = book2_df.groupby('Store', as_index=False).agg({
@@ -1596,8 +1599,8 @@ def map_data():
             flash("Both OSG and Product files are required.", "error")
             return redirect(url_for('reports_tools'))
             
-        osg_df = pd.read_excel(osg_file)
-        product_df = pd.read_excel(product_file, converters={'IMEI': str})
+        osg_df = timed_excel_read(osg_file, "OSG File", engine='openpyxl')
+        product_df = timed_excel_read(product_file, "Product File", converters={'IMEI': str}, engine='openpyxl')
         
         # ... Mapping Logic ...
         # SKU Mapping Dictionary
