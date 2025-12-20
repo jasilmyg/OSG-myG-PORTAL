@@ -374,6 +374,13 @@
             if (completed === total) {
                 completionBadge.className = 'completion-badge complete';
                 completionText.innerHTML = '<i class="ri-checkbox-circle-line"></i> All Steps Completed';
+
+                // AUTO-CHECK "Mark as Complete" when all 6 steps are done
+                const completeCheckbox = document.getElementById('chk_complete_repl');
+                if (completeCheckbox && !completeCheckbox.checked) {
+                    completeCheckbox.checked = true;
+                    updateCompletionStatus();
+                }
             } else {
                 completionBadge.className = 'completion-badge incomplete';
                 completionText.innerHTML = `<i class="ri-time-line"></i> ${total - completed} Steps Remaining`;
