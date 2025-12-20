@@ -100,12 +100,7 @@ function updateKPIs() {
     });
     document.getElementById('kpi-settled').textContent = settledClaims.length;
 
-    // Average TAT
-    const claimsWithTAT = claims.filter(c => c.tat && c.tat > 0);
-    const avgTAT = claimsWithTAT.length > 0
-        ? Math.round(claimsWithTAT.reduce((sum, c) => sum + c.tat, 0) / claimsWithTAT.length)
-        : 0;
-    document.getElementById('kpi-tat').textContent = avgTAT;
+
 
     // Today's New Claims
     const today = new Date().toISOString().split('T')[0];
