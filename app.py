@@ -203,8 +203,18 @@ class ClaimWrapper:
         return self._bool("Replacement: Settled with Accounts") or self._bool("Settled With Accounts (Yes/No)")
     
     @property
-    def complete(self): 
-        return self._bool("Complete") or self._bool("Complete (Yes/No)")
+    def complete(self):
+        """A claim is complete if marked complete OR if status is Repair Completed/Closed"""
+        # Check complete checkbox
+        if self._bool("Complete") or self._bool("Complete (Yes/No)"):
+            return True
+        
+        # Also consider certain statuses as non-pending
+        status = (self.status or "").strip().lower()
+        if status in ["repair completed", "closed"]:
+            return True
+            
+        return False
 
     @property
     def assigned_staff(self): return self.data.get("Assigned Staff")
