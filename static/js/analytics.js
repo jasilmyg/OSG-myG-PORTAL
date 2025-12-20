@@ -853,15 +853,7 @@ function openAnalyticsModal(claimId) {
         stepsHtml = `<div style="color: #666; font-style: italic;">No active workflow for status: ${claim.status}</div>`;
     }
 
-    // Add completion status
-    if (claim.complete) {
-        stepsHtml += `
-            <div class="step-item" style="background: rgba(40, 167, 69, 0.1); border: 1px solid green;">
-                <div class="step-icon"><i class="ri-check-double-line" style="color: green"></i></div>
-                <div class="step-label"><strong>Claim Completed</strong></div>
-            </div>
-        `;
-    }
+    // Add completion status (Removed per user request)
 
     stepsContainer.innerHTML = stepsHtml;
 
