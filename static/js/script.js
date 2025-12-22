@@ -3,6 +3,89 @@ function closeModal() {
     document.getElementById('modal-container').classList.add('hidden');
 }
 
+// Format Date like "21 Dec 2025"
+function formatDate(dateStr) {
+    if (!dateStr) return "--";
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function renderWorkflowList(data) {
+    const list = document.getElementById('workflowStatusList');
+    if (!list) return;
+    list.innerHTML = '';
+
+    // Status normalization
+    const status = (data.status || '').toLowerCase().trim();
+
+    const steps = [];
+
+    if (status.includes('replacement')) {
+        steps.push({ label: "Customer Confirmation", key: "replacement_confirmation" });
+        steps.push({ label: "Onsitego Approval", key: "replacement_osg_approval" });
+        steps.push({ label: "Mail Sent to Store", key: "replacement_mail_store" });
+        steps.push({ label: "Invoice Generated", key: "replacement_invoice_gen" });
+        steps.push({ label: "Invoice Sent", key: "replacement_invoice_sent" });
+        steps.push({ label: "Settled with Accounts", key: "replacement_settled_accounts" });
+
+    } else if (status === 'follow up') {
+        // Follow Up specific step
+        // Consider it "Completed" if there are any notes in history, otherwise "Pending"
+        const hasNotes = data.follow_up_notes && data.follow_up_notes.length > 0;
+        steps.push({ label: "Customer Follow Up", customDone: hasNotes });
+
+    } else if (status === 'closed') {
+        // Closed status step
+        steps.push({ label: "Claim Closed", customDone: true });
+
+    } else if (status === 'submitted') {
+        steps.push({ label: "Claim Submitted", customDone: true });
+
+    } else if (status === 'registered') {
+        steps.push({ label: "Claim Registered", customDone: true });
+
+    } else {
+        // Standard / Repair steps logic (Registered, Submitted, Repair Completed)
+        steps.push({ label: "Repair Feedback", key: "repair_feedback_completed" });
+
+        // If status is specifically Repair Completed, maybe add a completion step?
+        // sticking to requested "Repair Feedback" for now as the core repair metric.
+    }
+
+    steps.forEach(step => {
+        // Use customDone if present, otherwise check the data key
+        let isDone = false;
+        if (step.customDone !== undefined) {
+            isDone = step.customDone;
+        } else {
+            isDone = data[step.key] === true;
+        }
+
+        const statusText = isDone ? "Completed" : "Pending";
+        const iconClass = isDone ? "ri-check-line" : "ri-time-line";
+        const stateClass = isDone ? "completed" : "pending";
+
+        const html = `
+            <div class="workflow-item">
+                <div class="workflow-info">
+                    <div class="workflow-icon ${stateClass}">
+                        <i class="${iconClass}"></i>
+                    </div>
+                    <span class="workflow-text">${step.label}</span>
+                </div>
+                <span class="workflow-state ${stateClass}">${statusText}</span>
+            </div>
+        `;
+        list.innerHTML += html;
+    });
+}
+
+function toggleFollowUpHistory() {
+    const el = document.getElementById('followUpHistory');
+    if (el) el.classList.toggle('hidden');
+}
+
 function getISTDate() {
     const d = new Date();
     // distinct handling for time if needed, but input type="date" needs YYYY-MM-DD
@@ -304,264 +387,217 @@ function filterTable() {
     }
 }
 
+function filterClaims(type) {
+    const table = document.querySelector(".premium-table");
+    const tr = table.getElementsByTagName("tr");
+
+    // Clear Search Input when KPI clicked
+    const searchInput = document.getElementById("searchInput");
+    if (searchInput) searchInput.value = "";
+
+    for (let i = 1; i < tr.length; i++) {
+        const row = tr[i];
+        const isComplete = row.getAttribute('data-completed') === 'true';
+
+        if (type === 'all') {
+            row.style.display = "";
+        } else if (type === 'pending') {
+            if (!isComplete) row.style.display = "";
+            else row.style.display = "none";
+        } else if (type === 'completed') {
+            if (isComplete) row.style.display = "";
+            else row.style.display = "none";
+        }
+    }
+}
+
 // Modal Logic
 let currentClaimId = null;
 
 async function openClaimModal(id) {
     currentClaimId = id;
-
-    // Feedback: Wait cursor
     document.body.style.cursor = 'wait';
 
     try {
-        // 1. Fetch data FIRST
         const res = await fetch(`/claim/${id}`);
         if (!res.ok) throw new Error("Fetch failed");
         const data = await res.json();
 
-        // 2. Prepare Modal (Still Hidden)
         const modal = document.getElementById('modal-container');
         const body = document.getElementById('modal-body');
+        // Load READ-ONLY Template
         const tmpl = document.getElementById('claimDetailTemplate').content.cloneNode(true);
 
-        // Clear previous content and append new template
         body.innerHTML = '';
         body.appendChild(tmpl);
 
-        // 3. Populate fields
-        document.getElementById('modalTitle').textContent = `Claim #${id} - ${data.customer_name}`;
+        // Populate Read-Only Fields
+        const setText = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val || '--'; };
 
-        const subDate = document.getElementById('submittedDate');
-        if (subDate) subDate.value = data.date || '';
+        setText('disp_claimId', data.id); // Ensure property names match API response
+        setText('disp_status', data.status);
+        setText('disp_name', data.customer_name);
+        setText('disp_mobile', data.mobile_no);
+        setText('disp_product', data.product_name || data.model);
+        setText('disp_date', formatDate(data.date));
+        setText('disp_osid', data.osid);
+        setText('disp_invoice', data.invoice_no);
+        setText('disp_srno', data.serial_no);
 
-        const statusSel = document.getElementById('updateStatus');
-        if (statusSel) statusSel.value = data.status;
+        const issueBox = document.getElementById('disp_issue');
+        if (issueBox) issueBox.textContent = data.issue || "No issue description provided.";
 
-        // Populate other fields
-        const settledDate = document.getElementById('settledDate');
-        if (settledDate) settledDate.value = data.claim_settled_date || '';
+        // Render Workflow List (Read Only)
+        renderWorkflowList(data);
 
-        const followUpDate = document.getElementById('followUpDate');
-        if (followUpDate) followUpDate.value = data.follow_up_date || '';
+        // Follow Up History (View Only)
+        const histEl = document.getElementById('followUpHistory');
+        if (histEl) histEl.value = data.follow_up_notes || '';
 
-        const followUpHist = document.getElementById('followUpHistory');
-        if (followUpHist) followUpHist.value = data.follow_up_notes || '';
-
-        const newNote = document.getElementById('newFollowUpNote');
-        if (newNote) newNote.value = "";
-
-        const staff = document.getElementById('assignedStaff');
-        if (staff) staff.value = data.assigned_staff || '';
-
-        // Populate new fields
-        const osidEl = document.getElementById('claimOsid');
-        if (osidEl) osidEl.value = data.osid || '';
-
-        const srNoEl = document.getElementById('claimSrNo');
-        if (srNoEl) srNoEl.value = data.sr_no || '';
-
-        // Repair Section
-        const chkFb = document.getElementById('chk_repair_feedback');
-        if (chkFb) chkFb.checked = data.repair_feedback_completed;
-
-        // Initialize Workflow UI (Replacement)
-        if (typeof window.initializeWorkflow === 'function') {
-            window.initializeWorkflow(data);
-        } else {
-            // Fallback helper
-            const setChk = (eid, val) => { const e = document.getElementById(eid); if (e) e.checked = val; };
-            setChk('chk_repl_confirmation', data.replacement_confirmation);
-            setChk('chk_repl_osg_approval', data.replacement_osg_approval);
-            setChk('chk_repl_mail_store', data.replacement_mail_store);
-            setChk('chk_repl_invoice_gen', data.replacement_invoice_gen);
-            setChk('chk_repl_invoice_sent', data.replacement_invoice_sent);
-            setChk('chk_repl_settled_accounts', data.replacement_settled_accounts);
-        }
-
-        // TAT
-        const dispTat = document.getElementById('disp_tat');
-        if (dispTat) dispTat.textContent = (data.tat !== null && data.tat !== undefined) ? data.tat : "--";
-
-        // Complete Checkboxes
-        const isComplete = data.complete;
-        const chkRep = document.getElementById('chk_complete_repair');
-        const chkRepl = document.getElementById('chk_complete_repl');
-        if (chkRep) chkRep.checked = isComplete;
-        if (chkRepl) chkRepl.checked = isComplete;
-
-        // 4. Run UI Logic
-        // Attach listener first so logic runs correctly
-        if (statusSel) statusSel.addEventListener('change', checkStatusUI);
-        checkStatusUI();
-
-        // 5. FINALLY Show Modal
         modal.classList.remove('hidden');
 
     } catch (e) {
         console.error(e);
-        alert("Failed to load claim details. Please try again.");
+        alert("Failed to load claim details.");
     } finally {
-        // Reset cursor
+        document.body.style.cursor = 'default';
+    }
+}
+
+// Editor Modal for Action Button
+async function openClaimEditModal(id) {
+    currentClaimId = id;
+    document.body.style.cursor = 'wait';
+
+    try {
+        const res = await fetch(`/claim/${id}`);
+        if (!res.ok) throw new Error("Fetch failed");
+        const data = await res.json();
+
+        const modal = document.getElementById('modal-container');
+        const body = document.getElementById('modal-body');
+        // Load EDITOR Template
+        const tmpl = document.getElementById('claimEditTemplate').content.cloneNode(true);
+
+        body.innerHTML = '';
+        body.appendChild(tmpl);
+
+        // Populate Inputs
+        const setVal = (id, val) => { const e = document.getElementById(id); if (e) e.value = val || ''; };
+
+        setVal('detailName', data.customer_name);
+        setVal('detailMobile', data.mobile_no);
+        setVal('detailAddress', data.address);
+        setVal('detailProduct', data.product_name);
+        setVal('detailModel', data.model);
+        setVal('detailSerial', data.serial_no); // Using serial_no from backend
+        setVal('detailInvoice', data.invoice_no);
+        setVal('claimOsid', data.osid);
+        setVal('claimSrNo', data.serial_no); // Usually editable SR No matches serial? Or separate SR? Assuming backend mapping.
+        setVal('submittedDate', formatDate(data.date));
+        setVal('detailIssue', data.issue);
+
+        // Status Dropdown
+        setVal('updateStatus', data.status);
+
+        // Follow Up
+        setVal('followUpHistory', data.follow_up_notes || '');
+        setVal('followUpDate', data.next_follow_up_date);
+        setVal('assignedStaff', data.assigned_staff);
+        setVal('settledDate', data.claim_settled_date);
+
+        // Initial UI State
+        const statusDropdown = document.getElementById('updateStatus');
+        if (statusDropdown) {
+            statusDropdown.addEventListener('change', checkStatusUI);
+        }
+
+        checkStatusUI();
+
+        // Initialize Workflow Checkboxes
+        if (window.initializeWorkflow) {
+            window.initializeWorkflow(data);
+        }
+
+        modal.classList.remove('hidden');
+
+    } catch (e) {
+        console.error(e);
+        alert("Failed to load editor.");
+    } finally {
         document.body.style.cursor = 'default';
     }
 }
 
 function checkStatusUI() {
-    const status = document.getElementById('updateStatus').value;
-    const isSubmitted = status === 'Submitted';
-    const isRegistered = status === 'Registered';
-    const isFollowUp = status === 'Follow Up';
-    const isRepairCompleted = status === 'Repair Completed';
+    const statusEl = document.getElementById('updateStatus');
+    if (!statusEl) return;
+    const status = statusEl.value;
 
-    // Tabs Buttons / Container
+    // Elements
     const tabsContainer = document.querySelector('#modal-body .tabs');
-    const btnWorkflow = document.getElementById('btn-tab-workflow');
-    const btnNotes = document.getElementById('btn-tab-notes');
+    const inputSrNo = document.getElementById('claimSrNo');
+    const divSrNo = inputSrNo?.closest('.field-group');
+    const followUpSection = document.querySelector('.follow-up-section');
+    const wfRepair = document.getElementById('wf-section-repair');
+    const wfReplacement = document.getElementById('workflow-replacement-section');
 
-    // Sections
-    const TabWorkflow = document.getElementById('tab-workflow');
-    const TabNotes = document.getElementById('tab-notes');
+    // Default: Reset standard sections
+    if (tabsContainer) tabsContainer.classList.remove('hidden'); // Default show tabs
+    if (divSrNo) divSrNo.classList.add('hidden');
+    if (followUpSection) followUpSection.classList.add('hidden');
+    if (wfRepair) wfRepair.classList.add('hidden');
+    if (wfReplacement) wfReplacement.classList.add('hidden');
 
-    // Workflow Sub-Sections
-    const wfSectionRepair = document.getElementById('wf-section-repair');
-    const wfSectionRepl = document.getElementById('workflow-replacement-section');
+    // Manage Info Fields Visibility
+    const allInfoFields = document.querySelectorAll('#tab-info .details-grid .field-group');
+    const showAllInfo = () => {
+        allInfoFields.forEach(el => el.classList.remove('hidden'));
+        if (divSrNo) divSrNo.classList.add('hidden'); // Re-hide SR by default
+    };
 
-    // Info Fields
-    const GrpSettled = document.getElementById('grp-settled');
-    const GrpStaff = document.getElementById('grp-staff');
-    const GrpSubmitted = document.getElementById('grp-submitted');
-    const GrpOsid = document.getElementById('grp-osid');
-    const GrpSrNo = document.getElementById('grp-srno');
-    const wfSectionFollowUp = document.getElementById('wf-section-followup');
-
-    // Controls
-    const btnSave = document.getElementById('btn-save-changes');
-    const subDateInput = document.getElementById('submittedDate');
-
-    // --- Modes ---
-
-    if (isSubmitted || isRegistered) {
-        // Mode 1: Info Only (Date only)
+    // Status Logic
+    if (status === 'Submitted') {
+        // Submitted: No Tabs, Full View, SR Input Hidden
         if (tabsContainer) tabsContainer.classList.add('hidden');
-
         switchTab('info');
+        showAllInfo();
+    }
+    else if (status === 'Registered') {
+        // Registered: No Tabs, Full Info + SR No
+        if (tabsContainer) tabsContainer.classList.add('hidden');
+        switchTab('info');
+        showAllInfo();
+        if (divSrNo) divSrNo.classList.remove('hidden');
+    }
+    else if (status === 'Follow Up') {
+        // Follow Up: No Tabs, Full Info + Follow Up Section
+        if (tabsContainer) tabsContainer.classList.add('hidden');
+        switchTab('info');
+        showAllInfo();
 
-        // Hide other tabs content explicitly
-        if (TabWorkflow) TabWorkflow.classList.add('hidden');
-        if (TabNotes) TabNotes.classList.add('hidden');
+        if (followUpSection) followUpSection.classList.remove('hidden');
 
-        // Layout Info Fields
-        if (GrpSettled) GrpSettled.classList.add('hidden');
-        if (GrpStaff) GrpStaff.classList.add('hidden');
-        if (GrpSubmitted) GrpSubmitted.classList.remove('hidden');
-
-        // Ensure SR No/OSID visible
-        if (GrpOsid) GrpOsid.classList.remove('hidden');
-        if (GrpSrNo) GrpSrNo.classList.remove('hidden');
-
-        // Controls
-        if (isRegistered) {
-            // Registered: Set Date to Today (IST), Readonly, Show Save
-            if (btnSave) btnSave.classList.remove('hidden');
-            if (subDateInput) {
-                subDateInput.value = getISTDate();
-                subDateInput.setAttribute('readonly', true);
-            }
-        } else {
-            // Submitted: Readonly Date (Historical), Hide Save
-            if (btnSave) btnSave.classList.add('hidden');
-            if (subDateInput) subDateInput.setAttribute('readonly', true);
+        const fDate = document.getElementById('followUpDate');
+        if (fDate) {
+            fDate.removeAttribute('readonly');
+            if (!fDate.value) fDate.value = getISTDate();
         }
-
-    } else if (isFollowUp || status === 'Closed') {
-        // Mode 2: Follow Up OR Closed (Now inside Workflow section)
-        if (tabsContainer) tabsContainer.classList.add('hidden');
-
-        switchTab('workflow'); // Force Workflow Tab instead of Notes
-
-        // Ensure Visibility of Workflow Tab Only
-        if (TabWorkflow) TabWorkflow.classList.remove('hidden');
-        if (TabNotes) TabNotes.classList.add('hidden');
-
-        // Toggle Subsections: Only show Follow Up history
-        if (wfSectionRepair) wfSectionRepair.classList.add('hidden');
-        if (wfSectionRepl) wfSectionRepl.classList.add('hidden');
-        if (wfSectionFollowUp) wfSectionFollowUp.classList.remove('hidden');
-
-        // Controls
-        if (btnSave) btnSave.classList.remove('hidden');
-
-        // Follow Up Date: Today (IST), Readonly
-        const followUpDateInput = document.getElementById('followUpDate');
-        if (followUpDateInput) {
-            followUpDateInput.value = getISTDate();
-            followUpDateInput.setAttribute('readonly', true);
-        }
-
-        // Safe reset
-        if (subDateInput) subDateInput.setAttribute('readonly', true);
-
-    } else if (isRepairCompleted) {
-        // Mode 3: Repair Completed (Workflow -> Repair Only)
-        if (tabsContainer) tabsContainer.classList.add('hidden');
-
-        switchTab('workflow'); // Force Workflow Tab
-
-        // Ensure Visibility of Workflow Tab Only
-        if (TabWorkflow) TabWorkflow.classList.remove('hidden');
-        if (TabNotes) TabNotes.classList.add('hidden');
-
-        // Toggle Subsections
-        if (wfSectionRepair) wfSectionRepair.classList.remove('hidden');
-        if (wfSectionRepl) wfSectionRepl.classList.add('hidden');
-        if (wfSectionFollowUp) wfSectionFollowUp.classList.add('hidden'); // Hide follow up here
-
-        // Controls
-        if (btnSave) btnSave.classList.remove('hidden');
-        if (subDateInput) subDateInput.setAttribute('readonly', true);
-
-    } else if (status === 'Replacement Approved' || status === 'Replacement approved') {
-        // Mode 4: Replacement Approved (Workflow -> Replacement Only)
-        if (tabsContainer) tabsContainer.classList.add('hidden');
-
-        switchTab('workflow'); // Force Workflow Tab
-
-        // Ensure Visibility of Workflow Tab Only
-        if (TabWorkflow) TabWorkflow.classList.remove('hidden');
-        if (TabNotes) TabNotes.classList.add('hidden');
-
-        // Toggle Subsections: HIDE Repair, SHOW Replacement
-        if (wfSectionRepair) wfSectionRepair.classList.add('hidden');
-        if (wfSectionRepl) wfSectionRepl.classList.remove('hidden');
-
-        // Controls
-        if (btnSave) btnSave.classList.remove('hidden');
-        if (subDateInput) subDateInput.setAttribute('readonly', true);
-
-    } else {
-        // Mode 5: Full Workflow / Other
-        if (tabsContainer) tabsContainer.classList.remove('hidden');
-
-        // Show all Buttons
-        if (btnWorkflow) btnWorkflow.classList.remove('hidden');
-        if (btnNotes) btnNotes.classList.remove('hidden');
-
-        // Ensure content not forced hidden
-        if (TabWorkflow) TabWorkflow.classList.remove('hidden');
-        if (TabNotes) TabNotes.classList.remove('hidden');
-
-        // Show all Workflow Subsections
-        if (wfSectionRepair) wfSectionRepair.classList.remove('hidden');
-        if (wfSectionRepl) wfSectionRepl.classList.remove('hidden');
-
-        // Restore Info Fields
-        if (GrpSettled) GrpSettled.classList.remove('hidden');
-        if (GrpStaff) GrpStaff.classList.remove('hidden');
-        if (GrpSubmitted) GrpSubmitted.classList.remove('hidden');
-
-        // Controls
-        if (btnSave) btnSave.classList.remove('hidden');
-        if (subDateInput) subDateInput.setAttribute('readonly', true);
+    }
+    else if (status === 'Repair Completed') {
+        // Repair: Show Tabs, Workflow Tab
+        switchTab('workflow');
+        if (wfRepair) wfRepair.classList.remove('hidden');
+    }
+    else if (status === 'Replacement approved' || status === 'Replacement Approved') {
+        // Replacement: Show Tabs, Workflow Tab
+        switchTab('workflow');
+        if (wfReplacement) wfReplacement.classList.remove('hidden');
+    }
+    else if (status === 'Closed') {
+        // Closed: Show Tabs
+        switchTab('info');
+        showAllInfo();
     }
 }
 
@@ -606,7 +642,7 @@ async function saveClaimChanges() {
 
     const payload = {
         status: document.getElementById('updateStatus').value,
-        date: document.getElementById('submittedDate').value,
+
         follow_up_date: document.getElementById('followUpDate').value || null,
 
         // Use the combined history for "Follow Up - Notes" column
@@ -639,7 +675,7 @@ async function saveClaimChanges() {
     };
 
     // Other fields
-    payload.assigned_staff = document.getElementById('assignedStaff').value;
+
     payload.repair_feedback_completed = isFeedbackDone;
 
     // Replacement workflow fields (Columns O-T)

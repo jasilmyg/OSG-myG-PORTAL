@@ -6,6 +6,7 @@ let statusChart = null;
 let trendChart = null;
 let modelChart = null;
 let branchChart = null;
+let largeBranchChart = null;
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', function () {
@@ -104,12 +105,16 @@ function updateKPIs() {
 
     // Replacement Approved Completed
     const settledClaims = claims.filter(c => {
-        const hasReplacementStatus =
-            c.status === 'Replacement Approved' ||
-            c.status === 'Replacement approved';
+        const s = (c.status || '').toLowerCase();
+        const hasReplacementStatus = s.includes('replacement') && s.includes('approved');
         return c.complete && hasReplacementStatus;
     });
     document.getElementById('kpi-settled').textContent = settledClaims.length;
+
+    // Closed as Completed (New KPI)
+    const closedClaims = claims.filter(c => (c.status || '').toLowerCase() === 'closed');
+    const kpiClosedEl = document.getElementById('kpi-closed');
+    if (kpiClosedEl) kpiClosedEl.textContent = closedClaims.length;
 
 
 
@@ -318,10 +323,10 @@ function updateBranchChart() {
         branchCounts[b] = (branchCounts[b] || 0) + 1;
     });
 
-    // Sort Descending (Top 15)
+    // Sort Descending (Top 7)
     const sorted = Object.entries(branchCounts)
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 15);
+        .slice(0, 7);
 
     // Destroy existing
     if (branchChart) branchChart.destroy();
@@ -458,11 +463,12 @@ function updatePendingActions() {
         followUpContainer.innerHTML = '<div class="empty-state-sm">No pending follow-ups</div>';
     } else {
         let html = '';
-        pendingFollowUp.slice(0, 5).forEach(claim => {
+
+        pendingFollowUp.forEach(claim => {
             const daysOld = calculateDaysOld(claim.submitted_date);
             const isOverdue = daysOld > 3;
             html += `
-                <div class="action-item ${isOverdue ? 'overdue' : ''}">
+                <div class="action-item ${isOverdue ? 'overdue' : ''}" onclick="openAnalyticsModal('${claim.claim_id}')" style="cursor: pointer;">
                     <div class="action-info">
                         <strong>${claim.claim_id}</strong> - ${claim.customer_name}
                         <span class="action-date">${daysOld} days old</span>
@@ -477,18 +483,13 @@ function updatePendingActions() {
     // 2. Pending Replacement
     const pendingReplacement = filteredClaims.filter(c => {
         // Strict check: Only count if status is 'Replacement Approved' or 'Replacement approved'
-        const hasReplacementStatus =
-            c.status === 'Replacement Approved' ||
-            c.status === 'Replacement approved';
+        const s = (c.status || '').toLowerCase();
+        const hasReplacementStatus = s.includes('replacement') && s.includes('approved');
 
         if (!hasReplacementStatus) return false;
 
-        return !c.replacement_confirmation ||
-            !c.replacement_osg_approval ||
-            !c.replacement_mail_store ||
-            !c.replacement_invoice_gen ||
-            !c.replacement_invoice_sent ||
-            !c.replacement_settled_accounts;
+        // Use the complete flag from backend which now includes mail_sent_to_store
+        return !c.complete;
     });
 
     document.getElementById('pendingReplacementCount').textContent = pendingReplacement.length;
@@ -498,10 +499,11 @@ function updatePendingActions() {
         replacementContainer.innerHTML = '<div class="empty-state-sm">No pending replacements</div>';
     } else {
         let html = '';
-        pendingReplacement.slice(0, 5).forEach(claim => {
+
+        pendingReplacement.forEach(claim => {
             const pendingStage = getPendingReplacementStage(claim);
             html += `
-                <div class="action-item">
+                <div class="action-item" onclick="openAnalyticsModal('${claim.claim_id}')" style="cursor: pointer;">
                     <div class="action-info">
                         <strong>${claim.claim_id}</strong> - ${claim.customer_name}
                         <span class="action-stage">Pending: ${pendingStage}</span>
@@ -799,6 +801,12 @@ function openAnalyticsModal(claimId) {
     const claim = allClaims.find(c => c.claim_id === claimId);
     if (!claim) return;
 
+    // ... (rest of local modal logic) ...
+    // Since I can't easily see the end of this function without scrolling more, I will insert the NEW functions 
+    // for the branch modal clearly at the end of the file or after filteredClaims usage.
+    // Actually, I should just append them at the end. I will use a different chunk for that.
+
+
     // Populate Modal Fields
     document.getElementById('m_claim_id').textContent = claim.claim_id;
     document.getElementById('m_status').textContent = claim.status;
@@ -865,6 +873,77 @@ function openAnalyticsModal(claimId) {
 
     // Show Modal
     document.getElementById('analytics-modal').classList.remove('hidden');
+}
+
+// 🔹 BRANCH MODAL LOGIC
+function openBranchModal() {
+    const modal = document.getElementById('branchModal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    modal.classList.add('flex'); // Ensure flex display
+
+    // Render Large Chart
+    setTimeout(() => {
+        const ctx = document.getElementById('branchChartLarge');
+        if (!ctx) return;
+
+        // Recalculate counts for ALL branches
+        const branchCounts = {};
+        filteredClaims.forEach(c => {
+            const b = c.branch || 'Unknown';
+            branchCounts[b] = (branchCounts[b] || 0) + 1;
+        });
+
+        const sorted = Object.entries(branchCounts)
+            .sort((a, b) => b[1] - a[1]); // All branches
+
+        if (largeBranchChart) largeBranchChart.destroy();
+
+        largeBranchChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: sorted.map(i => i[0]),
+                datasets: [{
+                    label: 'Claims',
+                    data: sorted.map(i => i[1]),
+                    backgroundColor: '#8b5cf6',
+                    borderRadius: 4,
+                    maxBarThickness: 40
+                }]
+            },
+            options: {
+                indexAxis: 'y', // Horizontal Layout
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    title: {
+                        display: true,
+                        text: 'Branch Performance (All Branches)',
+                        font: { size: 16 }
+                    }
+                },
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        ticks: { precision: 0 }
+                    },
+                    y: {
+                        grid: { display: false },
+                        ticks: { autoSkip: false } // Show all labels in large view
+                    }
+                }
+            }
+        });
+    }, 100);
+}
+
+function closeBranchModal() {
+    const modal = document.getElementById('branchModal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
 }
 
 function closeAnalyticsModal() {

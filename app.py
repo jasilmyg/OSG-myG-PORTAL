@@ -125,6 +125,7 @@ class ClaimWrapper:
             '%d-%m-%Y',           # 17-12-2025
             '%d/%m/%Y',           # 17/12/2025
             '%m/%d/%Y',           # 12/17/2025
+            '%d %b %Y',           # 17 Dec 2025
         ]
         
         for fmt in formats_to_try:
@@ -224,6 +225,10 @@ class ClaimWrapper:
         
         # Check if all replacement workflow steps are completed
         if "replacement" in status and "approved" in status:
+            # A replacement claim is complete if all steps are done OR if mail is sent to store
+            if self.mail_sent_to_store:
+                return True
+                
             all_steps_done = (
                 self.cust_confirmation_pending and
                 self.approval_mail_received and
@@ -334,7 +339,11 @@ def dashboard():
     pending = len([c for c in claims if not c.complete])
     completed = len([c for c in claims if c.complete])
     
-    return render_template('dashboard.html', claims=claims, total=total, pending=pending, completed=completed)
+    # Calculate Avg TAT
+    tat_values = [c.tat for c in claims if c.tat is not None and isinstance(c.tat, int)]
+    avg_tat = round(sum(tat_values) / len(tat_values)) if tat_values else 0
+
+    return render_template('dashboard.html', claims=claims, total=total, pending=pending, completed=completed, avg_tat=avg_tat)
 
 @app.route('/health')
 def health_check():
@@ -773,6 +782,13 @@ def get_claim(id):
         "id": found.claim_id,
         "date": found.created_at.strftime('%Y-%m-%d'),
         "customer_name": found.customer_name,
+        "mobile_no": found.mobile_no or "",
+        "invoice_no": found.invoice_no or "",
+        "serial_no": found.serial_no or "",
+        "model": found.model or "",
+        "issue": found.issue or "",
+        "address": found.address or "",
+        "claim_settled_date": found.claim_settled_date or "",
         "status": found.status,
         "follow_up_date": found.follow_up_date or "",
         "follow_up_notes": found.follow_up_notes or "",
@@ -913,7 +929,7 @@ def update_claim(id):
 
 def sync_to_google_sheet_dict(payload):
     """
-    Sends dict payload to Google Sheet.
+    Sends dict payload to Google Sheet ASYNCHRONOUSLY.
     Keys must match headers exactly or normalized logic in GAS.
     """
     if not WEB_APP_URL:
@@ -922,12 +938,17 @@ def sync_to_google_sheet_dict(payload):
     # Auto-add timestamp
     payload["Last Updated Timestamp"] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    try:
-        response = requests.post(WEB_APP_URL, json=payload, timeout=10)
-        print(f"Sync Status: {response.status_code}, Response: {response.text}")
-    except Exception as e:
-        print(f"Google Sheet Sync Failed: {e}")
-        raise e
+    def _sync():
+        try:
+            print(f"Starting Background Sync for Claim {payload.get('Claim ID', 'Unknown')}...")
+            response = requests.post(WEB_APP_URL, json=payload, timeout=20)
+            print(f"Sync Status: {response.status_code}, Response: {response.text}")
+        except Exception as e:
+            print(f"Google Sheet Sync Failed: {e}")
+
+    # Start background thread
+    threading.Thread(target=_sync).start()
+
 
 # ----------------------
 # DEBUG ENDPOINT
@@ -1036,7 +1057,7 @@ def get_analytics_data():
                 'replacement_settled_accounts': parse_bool(claim.data.get("Settled With Accounts (Yes/No)")),
                 
                 # Complete flag
-                'complete': parse_bool(claim.data.get("Complete (Yes/No)"))
+                'complete': claim.complete
             })
         
         return jsonify({

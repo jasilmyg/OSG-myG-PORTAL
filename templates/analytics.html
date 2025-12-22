@@ -153,6 +153,17 @@
             </div>
         </div>
 
+        <div class="kpi-card glass-panel purple">
+            <div class="kpi-icon">
+                <i class="ri-checkbox-multiple-line"></i>
+            </div>
+            <div class="kpi-content">
+                <h4>Closed as Completed</h4>
+                <div class="kpi-value" id="kpi-closed">0</div>
+                <p class="kpi-subtitle">Total Closed</p>
+            </div>
+        </div>
+
 
 
         <div class="kpi-card glass-panel indigo">
@@ -230,6 +241,9 @@
         <div class="chart-container glass-panel" style="width: 100%;">
             <div class="chart-header">
                 <h3><i class="ri-store-2-line"></i> Branch Wise Analysis</h3>
+                <button class="btn-icon-sm" onclick="openBranchModal()" title="Enlarge">
+                    <i class="ri-fullscreen-line"></i>
+                </button>
             </div>
             <div class="chart-body" style="height: 300px;">
                 <canvas id="branchChart"></canvas>
@@ -390,6 +404,24 @@
 
         <div class="modal-footer" style="margin-top: 2rem; display: flex; justify-content: flex-end;">
             <button class="btn-secondary" onclick="closeAnalyticsModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Branch Modal -->
+<div id="branchModal" class="modal-overlay hidden">
+    <div class="modal-content glass-panel"
+        style="width: 90%; max-width: 1200px; height: 90vh; display: flex; flex-direction: column;">
+        <div class="modal-header">
+            <h2><i class="ri-store-2-line"></i> All Branch Wise Analysis</h2>
+            <button class="btn-close" onclick="closeBranchModal()">
+                <i class="ri-close-line"></i>
+            </button>
+        </div>
+        <div class="modal-body" style="flex: 1; min-height: 0; padding: 20px;">
+            <div style="width: 100%; height: 100%;">
+                <canvas id="branchChartLarge"></canvas>
+            </div>
         </div>
     </div>
 </div>

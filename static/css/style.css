@@ -648,6 +648,101 @@ body {
     border-color: var(--text-main);
 }
 
+/* Premium Modal Details */
+.detail-grid-premium {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.detail-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.detail-label {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+    font-weight: 500;
+}
+
+.detail-value {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-main);
+    word-break: break-word; /* Prevent overflow */
+}
+
+.issue-box {
+    background: #f9fafb;
+    padding: 1rem;
+    border-radius: 8px;
+    color: var(--text-main);
+    font-size: 0.95rem;
+    margin-top: 0.5rem;
+    border: 1px solid #f3f4f6;
+}
+
+.workflow-status-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.workflow-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.workflow-item:last-child {
+    border-bottom: none;
+}
+
+.workflow-info {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.workflow-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+}
+
+.workflow-icon.completed {
+    background: #10b981;
+    color: white;
+}
+
+.workflow-icon.pending {
+    background: #e5e7eb;
+    color: var(--text-tertiary);
+}
+
+.workflow-text {
+    font-weight: 500;
+    color: var(--text-main);
+}
+
+.workflow-state {
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.workflow-state.completed { color: var(--success); }
+.workflow-state.pending { color: var(--text-tertiary); }
+
 /* Mobile */
 @media (max-width: 1024px) {
     .app-container {
