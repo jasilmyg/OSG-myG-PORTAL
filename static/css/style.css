@@ -507,7 +507,7 @@ body {
     max-width: 900px;
     max-height: 90vh;
     overflow-y: auto;
-    padding: 2.5rem;
+    padding: 2rem 2.5rem 1.5rem;
 }
 
 .claim-detail-view {
@@ -574,6 +574,28 @@ body {
 .tab-content {
     display: none;
     animation: fadeIn 0.3s ease;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding-right: 8px;
+}
+
+/* Custom Scrollbar for Tab Content */
+.tab-content::-webkit-scrollbar {
+    width: 8px;
+}
+
+.tab-content::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 10px;
+}
+
+.tab-content::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 10px;
+}
+
+.tab-content::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
 }
 
 .tab-content.active {
@@ -672,7 +694,8 @@ body {
     font-size: 1rem;
     font-weight: 600;
     color: var(--text-main);
-    word-break: break-word; /* Prevent overflow */
+    word-break: break-word;
+    /* Prevent overflow */
 }
 
 .issue-box {
@@ -740,8 +763,13 @@ body {
     font-weight: 500;
 }
 
-.workflow-state.completed { color: var(--success); }
-.workflow-state.pending { color: var(--text-tertiary); }
+.workflow-state.completed {
+    color: var(--success);
+}
+
+.workflow-state.pending {
+    color: var(--text-tertiary);
+}
 
 /* Mobile */
 @media (max-width: 1024px) {
@@ -881,4 +909,48 @@ body {
 /* 🛠️ Utility Classes */
 .hidden {
     display: none !important;
+}
+
+/* 🔘 Button Styles */
+.btn-primary {
+    background: linear-gradient(135deg, var(--primary), #2563eb);
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+}
+
+.btn-primary:active {
+    transform: translateY(0);
+}
+
+.btn-secondary {
+    background: white;
+    color: var(--text-secondary);
+    border: 1px solid #e5e7eb;
+    padding: 0.75rem 1.5rem;
+    border-radius: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.btn-secondary:hover {
+    background: #f9fafb;
+    border-color: var(--text-tertiary);
+    transform: translateY(-2px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.btn-secondary:active {
+    transform: translateY(0);
 }
