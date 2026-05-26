@@ -288,7 +288,7 @@ class ClaimWrapper:
     
     @property
     def complete(self):
-        """A claim is complete if marked complete OR if status is Repair Completed/Closed OR all replacement workflow steps are done"""
+        """A claim is complete if marked complete OR if status is Repair Completed/Closed/Cancelled OR all replacement workflow steps are done"""
         status = (self.status or "").strip().lower()
         
         # Explicitly exclude active statuses from being complete
@@ -299,8 +299,8 @@ class ClaimWrapper:
         if self._bool("Complete") or self._bool("Complete (Yes/No)"):
             return True
         
-        # Also consider certain statuses as non-pending (resolved, rejected, or on-call)
-        if status in ["repair completed", "closed", "rejected", "no issue/oncall resolution", "no issue", "oncall resolution"]:
+        # Also consider certain statuses as non-pending (resolved, rejected, on-call, or cancelled)
+        if status in ["repair completed", "closed", "rejected", "no issue/oncall resolution", "no issue", "oncall resolution", "cancelled"]:
             return True
         
         # Check if all replacement workflow steps are completed
@@ -489,7 +489,7 @@ def dashboard():
         if status == "rejected":
             report_stats['rejected'] += 1
             report_stats['grand_total_status'] += 1
-        elif c.complete or status in ["repair completed", "closed", "no issue/oncall resolution", "no issue", "oncall resolution"]:
+        elif c.complete or status in ["repair completed", "closed", "no issue/oncall resolution", "no issue", "oncall resolution", "cancelled"]:
             report_stats['completed'] += 1
             report_stats['grand_total_status'] += 1
         else:
@@ -624,7 +624,7 @@ def download_report():
         if status == "rejected":
             report_stats['rejected'] += 1
             report_stats['grand_total_status'] += 1
-        elif c.complete or status in ["repair completed", "closed", "no issue/oncall resolution", "no issue", "oncall resolution"]:
+        elif c.complete or status in ["repair completed", "closed", "no issue/oncall resolution", "no issue", "oncall resolution", "cancelled"]:
             report_stats['completed'] += 1
             report_stats['grand_total_status'] += 1
         else:
