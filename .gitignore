@@ -12,4 +12,16 @@ site.db
 instance/
 uploads/
 cache.pkl
+
+# Temp and test files — not for production
+temp_status.html
+test2.py
+test_whatsapp.py
+test_whatsapp_debug.py
+setup_passwords.py
+check_pg.py
+force_test.py
+force_test3.py
 debug_output.json
+whatsapp_debug_log.txt
+bandit_report.txt

@@ -137,7 +137,10 @@ function updateKPIs() {
     if (kpiNoIssueEl) kpiNoIssueEl.textContent = noIssueClaims.length;
 
     // Cancelled Claims
-    const cancelledClaims = claims.filter(c => (c.status || '').toLowerCase().trim() === 'cancelled');
+    const cancelledClaims = claims.filter(c => {
+        const s = (c.status || '').toLowerCase();
+        return s === 'cancelled';
+    });
     const kpiCancelledEl = document.getElementById('kpi-cancelled');
     if (kpiCancelledEl) kpiCancelledEl.textContent = cancelledClaims.length;
 
@@ -933,7 +936,7 @@ function filterByCard(cardType) {
             });
             break;
         case 'cancelled':
-            filteredClaims = allClaims.filter(c => (c.status || '').toLowerCase().trim() === 'cancelled');
+            filteredClaims = allClaims.filter(c => (c.status || '').toLowerCase() === 'cancelled');
             break;
         default:
             filteredClaims = [...allClaims];

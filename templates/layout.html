@@ -61,6 +61,13 @@
                     class="nav-item {% if request.endpoint == 'claim_status' %}active{% endif %}">
                     <i class="ri-search-eye-line"></i> Claim Status
                 </a>
+                {% if session.get('role') == 'admin' %}
+                <a href="{{ url_for('db_manager') }}"
+                    class="nav-item {% if request.endpoint in ['db_manager','db_manager_login'] %}active{% endif %}"
+                    style="margin-top:.5rem; border-top:1px solid rgba(99,102,241,.12); padding-top:.9rem;">
+                    <i class="ri-database-2-line"></i> DB Manager
+                </a>
+                {% endif %}
             </nav>
 
             <div style="margin-top: auto; padding: 0 12px 10px;">

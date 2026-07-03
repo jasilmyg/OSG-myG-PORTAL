@@ -18,18 +18,43 @@ from collections import defaultdict
 from flask import send_file
 import threading
 import gc
+from dotenv import load_dotenv
+import secrets
+from urllib.parse import urlparse, urljoin
+from werkzeug.security import check_password_hash, generate_password_hash
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
+from flask_talisman import Talisman
+import logging
+
+# Input validation & sanitization
+from validators import (
+    sanitize_text, validate_mobile, validate_date_str, validate_claim_id,
+    validate_status, validate_file_upload, validate_search_type,
+    validate_claim_ids_list, validate_reset_token, validate_password_strength,
+    validate_username, validate_integer_range, validate_boolean, validate_time_slot,
+    MAX_TEXT_SHORT, MAX_TEXT_DEFAULT, MAX_TEXT_LONG,
+)
+
+load_dotenv()
 
 # Performance monitoring
 from perf_utils import timed_excel_read
+
+# PostgreSQL sync service
+try:
+    from services.pg_sync import fetch_claims_from_postgres, upsert_claim_to_postgres, test_connection as pg_test_connection
+    PG_AVAILABLE = bool(os.environ.get('DATABASE_URL'))
+except ImportError:
+    PG_AVAILABLE = False
+    logging.warning("[PG_SYNC] psycopg2 not installed — PostgreSQL fallback disabled.")
 
 # ----------------------
 # CONFIG
 # ----------------------
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-EXCEL_FILE = os.path.join(BASE_DIR, "Onsitego OSID updated upto FEB 2026.xlsx")
-CACHE_FILE = os.path.join(BASE_DIR, "cache.pkl")
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
-DB_FILE = os.path.join(BASE_DIR, "claims.db")
 
 # Email Config
 TARGET_EMAIL = "srteam@onsite.co.in"
@@ -37,24 +62,85 @@ CC_EMAILS = ["shine.at@onsite.co.in", "akhilmp@myg.in","sachin.kadam@onsite.co.i
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SENDER_EMAIL = "sarath.k@myg.in"
-SENDER_PASSWORD = "iwpp yytv scrs ncan"
-WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxiAe_F3lcG9kNyvcbYcETC8Rc4ZZ3O-o3CdgPfmbjpQj8_cby9FMP9f33M1LenQ006VA/exec"
+SENDER_PASSWORD = os.environ.get('SENDER_PASSWORD')
+
+# WhatsApp Notification Cutoff
+# Claims registered BEFORE this date will NOT receive WhatsApp notifications.
+# Format: YYYY-MM-DD. Change this date as needed.
+WHATSAPP_CUTOFF_DATE = datetime.datetime(2026, 7, 2)
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///site.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.secret_key = 'osg_myg_secret_key_2025'  # Required for session
+
+# Rate limiting
+limiter = Limiter(get_remote_address, app=app, default_limits=[])
+
+app.secret_key = os.environ.get('FLASK_SECRET_KEY')  # Required for session
 app.permanent_session_lifetime = datetime.timedelta(hours=24) # 24 hour session expiry
 
+# Secure session cookie flags
+app.config['SESSION_COOKIE_HTTPONLY'] = True   # Prevent JS access to session cookie
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # CSRF mitigation for cross-site requests
+app.config['SESSION_COOKIE_SECURE'] = False     # Only send cookie over HTTPS
+
+# Setup Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# Secure Deployment Middleware
+# Trust headers from Render Load Balancer
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+# Enforce HTTPS and add security headers
+Talisman(app, content_security_policy=None, force_https=False)
+
 db = SQLAlchemy(app)
+
+# ----------------------
+# SECURITY AND THREAT LOGGING
+# ----------------------
+@app.before_request
+def restrict_sensitive_files():
+    # Prevent traversal or direct access to sensitive filetypes or directories
+    forbidden_strings = ['.env', '.db', '.git', '.yaml', '/instance/']
+    
+    # Check if requested path contains forbidden substrings
+    path = request.path.lower()
+    for forbidden in forbidden_strings:
+        if forbidden in path:
+            logging.warning(f"[THREAT_DETECTED] Blocked path traversal attempt from IP {get_remote_address()} targeting {path}")
+            return jsonify({"error": "Forbidden"}), 403
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    logging.warning(f"[THREAT_DETECTED] Rate limit exceeded from IP {get_remote_address()} on route {request.path}: {e.description}")
+    return render_template('login.html', error=f"Rate limit exceeded: {e.description}. Try again later."), 429
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    logging.error(f"[SYSTEM_ERROR] Exception on {request.path} from IP {get_remote_address()}: {str(e)}", exc_info=True)
+    return "Internal Server Error", 500
 
 # ----------------------
 # AUTHENTICATION
 # ----------------------
 USERS = {
-    "admin": {"password": "password123", "role": "admin", "display": "Admin Manager"},
-    "customercare": {"password": "care123", "role": "customercare", "display": "Customer Care"}
+    "admin": {
+        "password_hash": os.environ.get('ADMIN_PASSWORD_HASH'), 
+        "role": "admin", 
+        "display": "Admin Manager",
+        "email": os.environ.get('ADMIN_EMAIL', 'jasil@myg.in')
+    },
+    "customercare": {
+        "password_hash": os.environ.get('CUSTOMERCARE_PASSWORD_HASH'), 
+        "role": "customercare", 
+        "display": "Customer Care",
+        "email": os.environ.get('CUSTOMERCARE_EMAIL', 'jasil@myg.in')
+    }
 }
 
 def login_required(f):
@@ -97,41 +183,153 @@ def customercare_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def is_safe_url(target):
+    ref_url = urlparse(request.host_url)
+    test_url = urlparse(urljoin(request.host_url, target))
+    return test_url.scheme in ('http', 'https') and ref_url.netloc == test_url.netloc
+
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("10 per minute; 30 per hour")
 def login():
     if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
-        
+        # Verify CSRF Token
+        session_token = session.get('csrf_token')
+        form_token = request.form.get('csrf_token')
+        if not session_token or form_token != session_token:
+            flash('Invalid request session. Please try again.', 'error')
+            return redirect(url_for('login'))
+
+        # --- INPUT VALIDATION ---
+        try:
+            username = validate_username(request.form.get('username', ''))
+        except ValueError as e:
+            logging.warning(f"[LOGIN_INVALID_INPUT] {e} from IP {get_remote_address()}")
+            flash('Invalid username or password', 'error')
+            session['csrf_token'] = secrets.token_hex(32)
+            return render_template('login.html')
+
+        password = request.form.get('password', '')
+        if not password or len(password) > 256:
+            flash('Invalid username or password', 'error')
+            session['csrf_token'] = secrets.token_hex(32)
+            return render_template('login.html')
+        # --- END VALIDATION ---
+
         user = USERS.get(username)
-        if user and user['password'] == password:
+        if user and check_password_hash(user['password_hash'], password):
             session.permanent = True
+            session.clear() # clear before setting new session to prevent fixation
             session['user_logged_in'] = True
             session['username'] = username
             session['role'] = user['role']
             session['display_name'] = user['display']
             flash('Login successful!', 'success')
             
+            logging.info(f"[LOGIN_SUCCESS] User '{username}' successfully logged in from IP {get_remote_address()}")
+
             # Redirect based on role
             next_page = request.args.get('next')
-            if next_page:
+            if next_page and is_safe_url(next_page):
                 return redirect(next_page)
             if user['role'] == 'customercare':
                 return redirect(url_for('claim_status'))
             return redirect(url_for('dashboard'))
         else:
+            logging.warning(f"[LOGIN_FAILURE] Failed login attempt for username '{username}' from IP {get_remote_address()}")
             flash('Invalid username or password', 'error')
     
+    # Generate CSRF for GET
+    session['csrf_token'] = secrets.token_hex(32)
     return render_template('login.html')
 
 @app.route('/logout')
 def logout():
-    session.pop('user_logged_in', None)
-    session.pop('username', None)
-    session.pop('role', None)
-    session.pop('display_name', None)
+    session.clear()
     flash('You have been logged out.', 'info')
     return redirect(url_for('login'))
+
+PASSWORD_RESET_TOKENS = {}
+
+@app.route('/forgot-password', methods=['GET', 'POST'])
+@limiter.limit("5 per minute; 10 per hour")
+def forgot_password():
+    if request.method == 'POST':
+        # --- INPUT VALIDATION ---
+        try:
+            username = validate_username(request.form.get('username', ''))
+        except ValueError:
+            # Don't reveal whether username is valid
+            flash('If the username exists, a reset link has been sent to the registered email.', 'info')
+            return redirect(url_for('login'))
+        # --- END VALIDATION ---
+        user = USERS.get(username)
+        if user and user.get('email'):
+            token = secrets.token_hex(32)
+            expires_at = datetime.datetime.now() + datetime.timedelta(minutes=15)
+            PASSWORD_RESET_TOKENS[token] = {'username': username, 'expires_at': expires_at}
+            reset_url = url_for('reset_password', token=token, _external=True)
+            try:
+                msg = MIMEMultipart()
+                msg["From"] = SENDER_EMAIL
+                msg["To"] = user['email']
+                msg["Subject"] = "OSG Portal - Password Reset"
+                body = f"Click <a href='{reset_url}'>here</a> to reset your password. The link expires in 15 minutes."
+                msg.attach(MIMEText(body, "html"))
+                with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+                    server.starttls()
+                    server.login(SENDER_EMAIL, SENDER_PASSWORD)
+                    server.sendmail(SENDER_EMAIL, user['email'], msg.as_string())
+            except Exception as e:
+                print(f"Failed to send reset email: {e}")
+        
+        flash('If the username exists, a reset link has been sent to the registered email.', 'info')
+        return redirect(url_for('login'))
+    return render_template('forgot_password.html')
+
+@app.route('/reset-password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    # --- INPUT VALIDATION: token format ---
+    try:
+        token = validate_reset_token(token)
+    except ValueError:
+        flash('Invalid or expired reset token.', 'error')
+        return redirect(url_for('login'))
+
+    token_data = PASSWORD_RESET_TOKENS.get(token)
+    if not token_data or datetime.datetime.now() > token_data['expires_at']:
+        flash('Invalid or expired reset token.', 'error')
+        return redirect(url_for('login'))
+        
+    if request.method == 'POST':
+        raw_password = request.form.get('password', '')
+        # --- INPUT VALIDATION: password complexity ---
+        try:
+            new_password = validate_password_strength(raw_password, field_name='New password')
+        except ValueError as e:
+            flash(str(e), 'error')
+            return render_template('reset_password.html', token=token)
+        if new_password:
+            username = token_data['username']
+            new_hash = generate_password_hash(new_password)
+            USERS[username]['password_hash'] = new_hash
+            
+            env_file = os.path.join(BASE_DIR, '.env')
+            try:
+                with open(env_file, 'r') as f:
+                    content = f.read()
+                prefix = 'ADMIN_PASSWORD_HASH=' if username == 'admin' else 'CUSTOMERCARE_PASSWORD_HASH='
+                lines = content.split('\n')
+                new_lines = [f"{prefix}{new_hash}" if line.startswith(prefix) else line for line in lines]
+                with open(env_file, 'w') as f:
+                    f.write('\n'.join(new_lines))
+            except Exception as e:
+                print(f"Failed to update .env: {e}")
+                
+            del PASSWORD_RESET_TOKENS[token]
+            flash('Password reset successful! Please login with your new password.', 'success')
+            return redirect(url_for('login'))
+            
+    return render_template('reset_password.html', token=token)
 
 # ----------------------
 # DATA MODEL (Wrapper)
@@ -164,6 +362,8 @@ class ClaimWrapper:
         
         # Try multiple date formats
         formats_to_try = [
+            '%Y-%d-%m %H:%M:%S',
+            '%Y-%d-%m',
             '%Y-%m-%d %H:%M:%S',  # 2025-12-17 10:30:00
             '%Y-%m-%d',           # 2025-12-17
             '%d-%m-%Y',           # 17-12-2025
@@ -174,11 +374,11 @@ class ClaimWrapper:
         
         for fmt in formats_to_try:
             try:
-                if fmt == '%Y-%m-%d %H:%M:%S':
+                if '%H:%M:%S' in fmt:
                     return datetime.datetime.strptime(s[:19], fmt)
                 else:
                     return datetime.datetime.strptime(s[:10], fmt)
-            except:
+            except (ValueError, TypeError):
                 continue
         
         # If all parsing fails, return current time
@@ -217,10 +417,12 @@ class ClaimWrapper:
     @property
     def status(self): return self.data.get("Status")
     
-    # Booleans (Sheet has "Yes"/"No" or empty)
+    # Booleans (Sheet has "Yes"/"No" or True/False or "1"/"0")
+    # Google Sheets API sends Python booleans → stored as "True"/"False" strings in DB
     def _bool(self, key):
         val = self.data.get(key, "")
-        return str(val).lower() == "yes"
+        v = str(val).strip().lower()
+        return v in ("yes", "true", "1")
 
     @property
     def repair_feedback_completed(self): return self._bool("Repair Feedback Completed (Yes/No)")
@@ -249,8 +451,16 @@ class ClaimWrapper:
         return self._bool("Replacement: OSG Approval") or self._bool("Approval Mail Received From Onsitego (Yes/No)")
     
     @property
-    def mail_sent_to_store(self): 
-        return self._bool("Replacement: Mail to Store") or self._bool("Mail Sent To Store (Yes/No)")
+    def mail_sent_to_store(self):
+        for key in ["Replacement: Mail to Store", "Mail Sent To Store (Yes/No)"]:
+            if self._bool(key):
+                return True
+        # Fuzzy fallback: any key containing "mail" and "store"
+        for k, v in self.data.items():
+            if isinstance(k, str) and "mail" in k.lower() and "store" in k.lower():
+                if str(v).strip().lower() in ("yes", "true", "1"):
+                    return True
+        return False
     
     @property
     def invoice_generated(self): 
@@ -261,8 +471,24 @@ class ClaimWrapper:
         return self._bool("Replacement: Invoice Sent to OSG") or self._bool("Invoice Sent To Onsitego (Yes/No)")
     
     @property
-    def settlement_mail_accounts(self): 
-        return self._bool("Settlement Mail to Accounts(Yes/No)") or self._bool("Replacement: Settlement Mail to Accounts")
+    def settlement_mail_accounts(self):
+        # Check all known column name variants
+        for key in [
+            "Replacement: Settlement Mail to Accounts",
+            "Settlement Mail to Accounts(Yes/No)",
+            "Settlement Mail to Accounts (Yes/No)",
+        ]:
+            if self._bool(key):
+                return True
+        # Fuzzy fallback: scan ALL data keys that relate to settlement mail
+        for k, v in self.data.items():
+            if not isinstance(k, str):
+                continue
+            kl = k.lower()
+            if "settlement" in kl and "mail" in kl and "account" in kl:
+                if str(v).strip().lower() in ("yes", "true", "1"):
+                    return True
+        return False
         
     @property
     def settled_with_accounts(self): 
@@ -288,7 +514,7 @@ class ClaimWrapper:
     
     @property
     def complete(self):
-        """A claim is complete if marked complete OR if status is Repair Completed/Closed/Cancelled OR all replacement workflow steps are done"""
+        """A claim is complete if marked complete OR if status is Repair Completed/Closed OR all replacement workflow steps are done"""
         status = (self.status or "").strip().lower()
         
         # Explicitly exclude active statuses from being complete
@@ -299,8 +525,9 @@ class ClaimWrapper:
         if self._bool("Complete") or self._bool("Complete (Yes/No)"):
             return True
         
-        # Also consider certain statuses as non-pending (resolved, rejected, on-call, or cancelled)
-        if status in ["repair completed", "closed", "rejected", "no issue/oncall resolution", "no issue", "oncall resolution", "cancelled"]:
+        # Also consider certain statuses as non-pending (resolved, rejected, cancelled, or on-call)
+        if status in ["repair completed", "closed", "rejected", "no issue/oncall resolution",
+                      "no issue", "oncall resolution", "cancelled"]:
             return True
         
         # Check if all replacement workflow steps are completed
@@ -334,15 +561,21 @@ class ClaimWrapper:
         if sheet_tat and str(sheet_tat).strip() and str(sheet_tat) != 'nan':
             try:
                 return int(float(sheet_tat))
-            except:
+            except (ValueError, TypeError, AttributeError):
                 pass
         
         # Otherwise calculate it
         if self.claim_settled_date and (self.data.get("Date") or self.data.get("Submitted Date")):
             try:
                 s_date = self.data.get("Date") or self.data.get("Submitted Date")
-                submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%m-%d')
-                settled = datetime.datetime.strptime(str(self.claim_settled_date).split()[0], '%Y-%m-%d')
+                try:
+                    submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%d-%m')
+                except Exception:
+                    submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%m-%d')
+                try:
+                    settled = datetime.datetime.strptime(str(self.claim_settled_date).split()[0], '%Y-%d-%m')
+                except Exception:
+                    settled = datetime.datetime.strptime(str(self.claim_settled_date).split()[0], '%Y-%m-%d')
                 return (settled - submitted).days
             except Exception as e:
                 return None
@@ -365,47 +598,53 @@ def invalidate_cache():
     print("Invalidating Cache...")
     CLAIMS_CACHE['last_updated'] = 0
 
-def fetch_claims_from_sheet(force_refresh=False):
+def fetch_claims_from_db(force_refresh=False):
     global CLAIMS_CACHE
+    import time
     
     current_time = time.time()
     if not force_refresh and (current_time - CLAIMS_CACHE['last_updated'] < CACHE_DURATION) and CLAIMS_CACHE['data']:
         print("Using Cached Data")
         return CLAIMS_CACHE['data']
 
+    if not PG_AVAILABLE:
+        logging.warning("[DB] PostgreSQL not configured, returning empty list.")
+        return []
+        
     try:
-        print("Fetching Fresh Data from Google Sheets...")
-        if not WEB_APP_URL: return []
-        resp = requests.get(WEB_APP_URL, timeout=10)
-        print(f"Fetch Status: {resp.status_code}") 
-        if resp.status_code == 200:
-            try:
-                data = resp.json()
-            except:
-                print(f"JSON Decode Error. Raw: {resp.text[:500]}")
-                return []
+        logging.info("[DB] Fetching Fresh Data from PostgreSQL...")
+        raw_rows = fetch_claims_from_postgres()
+        # raw_rows can be empty if DB has 0 claims
+        if raw_rows is not None:
+            claims = [ClaimWrapper(d) for d in raw_rows]
+            sorted_claims = sorted(claims, key=lambda x: x.created_at, reverse=True)
             
-            if isinstance(data, list):
-                # Convert list of dicts to list of Wrappers
-                claims = [ClaimWrapper(d) for d in data]
-                # Sort by Date desc
-                sorted_claims = sorted(claims, key=lambda x: x.created_at, reverse=True)
-                
-                # Update Cache
-                CLAIMS_CACHE['data'] = sorted_claims
-                CLAIMS_CACHE['last_updated'] = current_time
-                
-                return sorted_claims
-        return []
+            # Update Cache
+            CLAIMS_CACHE['data'] = sorted_claims
+            CLAIMS_CACHE['last_updated'] = current_time
+            
+            return sorted_claims
     except Exception as e:
-        print(f"Fetch Error: {e}")
-        # Return stale cache if fetch fails
-        if CLAIMS_CACHE['data']:
-            print("Fetch failed, returning stale cache")
-            return CLAIMS_CACHE['data']
-        return []
-
-
+        logging.error(f"[DB] Fetch Error: {e}")
+        
+    if CLAIMS_CACHE['data']:
+        print("Fetch failed, returning stale cache")
+        return CLAIMS_CACHE['data']
+    return []
+    try:
+        logging.info("[PG_FALLBACK] Attempting to load claims from PostgreSQL...")
+        raw_rows = fetch_claims_from_postgres()
+        if raw_rows:
+            claims = [ClaimWrapper(d) for d in raw_rows]
+            sorted_claims = sorted(claims, key=lambda x: x.created_at, reverse=True)
+            logging.info(f"[PG_FALLBACK] Loaded {len(sorted_claims)} claims from PostgreSQL.")
+            # Populate cache so subsequent in-process requests are fast
+            CLAIMS_CACHE['data'] = sorted_claims
+            CLAIMS_CACHE['last_updated'] = time.time()
+            return sorted_claims
+    except Exception as e:
+        logging.error(f"[PG_FALLBACK] PostgreSQL fallback failed: {e}")
+    return []
 
 # ----------------------
 # ROUTES
@@ -414,12 +653,11 @@ def fetch_claims_from_sheet(force_refresh=False):
 @admin_required
 def dashboard():
     refresh = request.args.get('refresh') == 'true'
-    claims = fetch_claims_from_sheet(force_refresh=refresh)
+    claims = fetch_claims_from_db(force_refresh=refresh)
     
     total = len(claims)
     pending = len([c for c in claims if not c.complete])
     completed = len([c for c in claims if c.complete])
-    cancelled = len([c for c in claims if (c.status or '').strip().lower() == 'cancelled'])
     
     # Calculate Avg TAT
     tat_values = [c.tat for c in claims if c.tat is not None and isinstance(c.tat, int)]
@@ -441,28 +679,22 @@ def dashboard():
         'report_date': now.strftime('%d-%m-%Y')
     }
 
-    def _parse_date(raw, claim_age=None):
+    def _parse_date(raw):
         if not raw or str(raw).strip() in ('', 'nan', 'None'): return None
         s = str(raw).strip()[:10]
         dt = None
-        for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
+        for fmt in ('%Y-%d-%m', '%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
             try:
                 dt = datetime.datetime.strptime(s, fmt)
                 break
-            except: continue
+            except (ValueError, TypeError): continue
         
-        # Google sheets DD-MM vs MM-DD swap fix
-        if dt:
-            needs_swap = (dt - now).days > 1
-            if not needs_swap and claim_age is not None:
-                parsed_age = (now - dt).days
-                if parsed_age > claim_age + 1:
-                    needs_swap = True
-            if needs_swap:
-                try:
-                    if '-' in s and len(s.split('-')[0]) == 4:
-                        dt = datetime.datetime.strptime(s, '%Y-%d-%m')
-                except: pass
+        # If it's a future date, Google Sheets likely interpreted DD-MM as MM-DD
+        if dt and (dt - now).days > 1:
+            try:
+                if '-' in s and len(s.split('-')[0]) == 4:
+                    dt = datetime.datetime.strptime(s, '%Y-%d-%m')
+            except (ValueError, TypeError): pass
         return dt
 
     for c in claims:
@@ -474,22 +706,28 @@ def dashboard():
         repl_age = age  # default fallback
         if settled_date_raw and str(settled_date_raw).strip() not in ('', 'nan', 'None'):
             try:
-                settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%m-%d')
+                settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%d-%m')
                 repl_age = (now - settled_dt).days
             except Exception:
                 try:
-                    settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%d-%m-%Y')
+                    settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%m-%d')
                     repl_age = (now - settled_dt).days
                 except Exception:
-                    repl_age = age  # keep submitted-date age if parsing fails
+                    try:
+                        settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%d-%m-%Y')
+                        repl_age = (now - settled_dt).days
+                    except Exception:
+                        repl_age = age  # keep submitted-date age if parsing fails
 
         status = (c.status or "").strip().lower()
-        
-        # STATUS column logic (uses submitted-date age)
+        is_replacement_claim = "replacement" in status
+
+        # STATUS column logic (uses submitted-date age) — original correct logic
         if status == "rejected":
             report_stats['rejected'] += 1
             report_stats['grand_total_status'] += 1
-        elif c.complete or status in ["repair completed", "closed", "no issue/oncall resolution", "no issue", "oncall resolution", "cancelled"]:
+        elif c.complete or status in ["repair completed", "closed", "no issue/oncall resolution",
+                                       "no issue", "oncall resolution", "cancelled"]:
             report_stats['completed'] += 1
             report_stats['grand_total_status'] += 1
         else:
@@ -497,14 +735,14 @@ def dashboard():
             report_stats['grand_total_status'] += 1
             if age <= 5:
                 report_stats['pending']['lt5'] += 1
-            elif age < 10:
+            elif age <= 10:
                 report_stats['pending']['gt5'] += 1
             else:
                 report_stats['pending']['gt10'] += 1
-                
+
         # REPLACEMENT column logic — waterfall: place claim at its CURRENT highest completed step
         # Aging buckets use claim_settled_date-based age (repl_age)
-        if "replacement" in status or c.mail_sent_to_store:
+        if is_replacement_claim or c.mail_sent_to_store:
             if c.settled_with_accounts:
                 report_stats['settled_accounts'] += 1
                 report_stats['grand_total_replacement'] += 1
@@ -512,73 +750,63 @@ def dashboard():
                 report_stats['settlement_mail_accounts']['total'] += 1
                 report_stats['grand_total_replacement'] += 1
                 if repl_age <= 5: report_stats['settlement_mail_accounts']['lt5'] += 1
-                elif repl_age < 10: report_stats['settlement_mail_accounts']['gt5'] += 1
+                elif repl_age <= 10: report_stats['settlement_mail_accounts']['gt5'] += 1
                 else: report_stats['settlement_mail_accounts']['gt10'] += 1
             elif c.invoice_sent_osg:
                 report_stats['pending_settlement_osg']['total'] += 1
                 report_stats['grand_total_replacement'] += 1
-                osg_dt = _parse_date(c.invoice_sent_osg_date, age)
+                osg_dt = _parse_date(c.invoice_sent_osg_date)
                 if osg_dt:
                     osg_age = max(0, (now - osg_dt).days)
                 else:
-                    inv_gen_dt = _parse_date(c.invoice_generated_date, age)
+                    inv_gen_dt = _parse_date(c.invoice_generated_date)
                     if inv_gen_dt:
                         osg_age = max(0, (now - inv_gen_dt).days)
                     else:
                         osg_age = max(0, repl_age)
                 if osg_age <= 5: report_stats['pending_settlement_osg']['lt5'] += 1
-                elif osg_age < 10: report_stats['pending_settlement_osg']['gt5'] += 1
+                elif osg_age <= 10: report_stats['pending_settlement_osg']['gt5'] += 1
                 else: report_stats['pending_settlement_osg']['gt10'] += 1
             elif c.invoice_generated:
                 report_stats['gst_invoice']['total'] += 1
                 report_stats['grand_total_replacement'] += 1
                 # Age from Invoice Generated Date (when GST invoice was billed)
                 # Fallback chain: Invoice Generated Date → Mail Sent To Store Date → repl_age
-                inv_gen_dt = _parse_date(c.invoice_generated_date, age)
+                inv_gen_dt = _parse_date(c.invoice_generated_date)
                 if inv_gen_dt:
                     gst_age = max(0, (now - inv_gen_dt).days)
                 else:
-                    store_dt = _parse_date(c.mail_sent_to_store_date, age)
+                    store_dt = _parse_date(c.mail_sent_to_store_date)
                     if store_dt:
                         gst_age = max(0, (now - store_dt).days)
                     else:
                         gst_age = max(0, repl_age)
 
                 if gst_age <= 5: report_stats['gst_invoice']['lt5'] += 1
-                elif gst_age < 10: report_stats['gst_invoice']['gt5'] += 1
+                elif gst_age <= 10: report_stats['gst_invoice']['gt5'] += 1
                 else: report_stats['gst_invoice']['gt10'] += 1
             else:
                 # mail_sent_to_store step OR replacement approved with no checkboxes yet
                 report_stats['replacement_mail']['total'] += 1
                 report_stats['grand_total_replacement'] += 1
-                
-                store_dt = _parse_date(c.mail_sent_to_store_date, age)
-                if store_dt:
-                    mail_age = max(0, (now - store_dt).days)
-                else:
-                    approval_dt = _parse_date(c.approval_mail_date, age)
-                    if approval_dt:
-                        mail_age = max(0, (now - approval_dt).days)
-                    else:
-                        # Fallback to 0 if replacement just started, otherwise use repl_age
-                        if not settled_date_raw or str(settled_date_raw).strip() in ('', 'nan', 'None'):
-                            mail_age = 0
-                        else:
-                            mail_age = max(0, repl_age)
-
-                if mail_age <= 5:
+                if repl_age <= 5:
                     report_stats['replacement_mail']['lt5'] += 1
-                elif mail_age < 10:
+                elif repl_age <= 10:
                     report_stats['replacement_mail']['gt5'] += 1
                 else:
                     report_stats['replacement_mail']['gt10'] += 1
 
-    return render_template('dashboard.html', claims=claims, total=total, pending=pending, completed=completed, cancelled=cancelled, avg_tat=avg_tat, report_stats=report_stats)
+    return render_template('dashboard.html', claims=claims, total=total, pending=pending, completed=completed, avg_tat=avg_tat, report_stats=report_stats)
 
 @app.route('/health')
+@app.route('/api/health')
 def health_check():
-    return jsonify({"status": "healthy", "timestamp": datetime.datetime.now().isoformat()}), 200
+    return jsonify({"status": "healthy", "timestamp": datetime.datetime.now().isoformat()})
 
+@app.route('/favicon.ico')
+def favicon():
+    # Return no content to avoid 404/500 errors from browser favicon requests
+    return '', 204
 
 @app.route('/download-report')
 @admin_required
@@ -587,7 +815,7 @@ def download_report():
     import xlsxwriter
 
     # ── Rebuild the same report_stats as in the dashboard route ──
-    claims = fetch_claims_from_sheet()
+    claims = fetch_claims_from_db()
     now = get_ist_now().replace(tzinfo=None)
 
     report_stats = {
@@ -610,21 +838,28 @@ def download_report():
         repl_age = age
         if settled_date_raw and str(settled_date_raw).strip() not in ('', 'nan', 'None'):
             try:
-                settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%m-%d')
+                settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%d-%m')
                 repl_age = (now - settled_dt).days
             except Exception:
                 try:
-                    settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%d-%m-%Y')
+                    settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%m-%d')
                     repl_age = (now - settled_dt).days
                 except Exception:
-                    repl_age = age
+                    try:
+                        settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%d-%m-%Y')
+                        repl_age = (now - settled_dt).days
+                    except Exception:
+                        repl_age = age
 
         status = (c.status or "").strip().lower()
+        is_replacement_claim = "replacement" in status
 
+        # STATUS column logic — original correct logic
         if status == "rejected":
             report_stats['rejected'] += 1
             report_stats['grand_total_status'] += 1
-        elif c.complete or status in ["repair completed", "closed", "no issue/oncall resolution", "no issue", "oncall resolution", "cancelled"]:
+        elif c.complete or status in ["repair completed", "closed", "no issue/oncall resolution",
+                                       "no issue", "oncall resolution", "cancelled"]:
             report_stats['completed'] += 1
             report_stats['grand_total_status'] += 1
         else:
@@ -632,12 +867,12 @@ def download_report():
             report_stats['grand_total_status'] += 1
             if age <= 5:
                 report_stats['pending']['lt5'] += 1
-            elif age < 10:
+            elif age <= 10:
                 report_stats['pending']['gt5'] += 1
             else:
                 report_stats['pending']['gt10'] += 1
 
-        if "replacement" in status or c.mail_sent_to_store:
+        if is_replacement_claim or c.mail_sent_to_store:
             if c.settled_with_accounts:
                 report_stats['settled_accounts'] += 1
                 report_stats['grand_total_replacement'] += 1
@@ -655,7 +890,7 @@ def download_report():
                 report_stats['grand_total_replacement'] += 1
                 if repl_age <= 5:
                     report_stats['replacement_mail']['lt5'] += 1
-                elif repl_age < 10:
+                elif repl_age <= 10:
                     report_stats['replacement_mail']['gt5'] += 1
                 else:
                     report_stats['replacement_mail']['gt10'] += 1
@@ -762,232 +997,93 @@ def download_report():
     )
 
 
-
-# Global Cache for Customer Lookup
-CUSTOMER_INDEX = {
-    'data': {},      # {mobile: {"name": str, "products": []}}
-    'last_mod': 0
-}
-
-# Lock for cache updates to prevent race conditions during write
-CACHE_LOCK = threading.Lock()
-REFRESH_THREAD_RUNNING = False
-
-def _refresh_cache_from_excel_background():
-    """Background worker to reload Excel and update cache"""
-    global CUSTOMER_INDEX, REFRESH_THREAD_RUNNING
-    
-    REFRESH_THREAD_RUNNING = True
-    with app.app_context(): # Ensure context if needed
-        try:
-            print("[BG-CACHE] Starting background refresh...")
-            
-            if not os.path.exists(EXCEL_FILE):
-                print(f"[BG-CACHE] Excel file not found: {EXCEL_FILE}")
-                REFRESH_THREAD_RUNNING = False
-                return
-
-            current_mtime = os.path.getmtime(EXCEL_FILE)
-            start_t = time.time()
-            
-            import pandas as pd
-            cols_to_use = [
-                'Customer', 'Mobile No', 'Invoice No', 'Store Name', 
-                'Model', 'Serial No', 'OSID', 'Date'
-            ]
-            
-            # Load Excel (Slow operation)
-            try:
-                df = pd.read_excel(EXCEL_FILE, usecols=cols_to_use, engine='openpyxl')
-            except:
-                df = pd.read_excel(EXCEL_FILE, engine='openpyxl')
-            
-            # Normalize
-            df.columns = [str(c).strip().lower() for c in df.columns]
-            
-            mob_col = None
-            for c in df.columns:
-                if "mobile" in c or "phone" in c:
-                    mob_col = c
-                    break
-            
-            if not mob_col:
-                print("[BG-CACHE] Error: No mobile column found")
-                REFRESH_THREAD_RUNNING = False
-                return
-
-            df = df.dropna(subset=[mob_col])
-            df['target_mobile_str'] = (
-                df[mob_col]
-                .astype(str)
-                .str.replace(r'\.0$', '', regex=True)
-                .str.strip()
-            )
-            
-            # Build Index
-            index = rebuild_index(df)
-            
-            # Save new Pickle (DIRECT INDEX CACHE)
-            print("[BG-CACHE] Saving Index to Pickle (Optimized)...")
-            import pickle
-            with open(CACHE_FILE, 'wb') as f:
-                pickle.dump(index, f)
-            
-            # Update Global Cache safely
-            with CACHE_LOCK:
-                CUSTOMER_INDEX['data'] = index
-                CUSTOMER_INDEX['last_mod'] = current_mtime
-            
-            print(f"[BG-CACHE] Refresh Complete. Took {time.time() - start_t:.2f}s. New Size: {len(index)}")
-            
-        except Exception as e:
-            print(f"[BG-CACHE] Failed: {e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            REFRESH_THREAD_RUNNING = False
-
-def load_excel_data():
+# ──────────────────────────────────────────────────────────────────────────
+# CUSTOMER LOOKUP — PostgreSQL (osid_data table)
+# ──────────────────────────────────────────────────────────────────────────
+def lookup_customer_from_db(mobile: str) -> dict:
     """
-    Super-Optimized 'Stale-While-Revalidate' Loader:
-    1. Returns In-Memory Cache INSTANTLY.
-    2. Returns Pickle Cache INSTANTLY (Direct Dict Load - No Processing).
-    3. Checks freshness in background.
+    Query the osid_data table for all products linked to a mobile number.
+    Returns {'name': str, 'products': [...]} or None if not found.
     """
-    import pickle
-    global CUSTOMER_INDEX, REFRESH_THREAD_RUNNING
-    
     try:
-        # 1. In-Memory Check (Fastest - NO DISK I/O)
-        if CUSTOMER_INDEX['data']:
-            return CUSTOMER_INDEX['data']
+        import psycopg2
+        import psycopg2.extras
+        db_url = os.environ.get('DATABASE_URL')
+        if not db_url:
+            logging.warning('[LOOKUP] DATABASE_URL not set.')
+            return None
 
-        # 2. Pickle Check FIRST — cache.pkl is committed to Git and always on Render
-        if os.path.exists(CACHE_FILE):
-            try:
-                print("[CACHE] Reading Pickle Index...")
-                t0 = time.time()
-                
-                with open(CACHE_FILE, 'rb') as f:
-                    index = pickle.load(f)
-                
-                if not isinstance(index, dict) or not index:
-                    raise ValueError("Empty or invalid pickle cache")
+        conn = psycopg2.connect(db_url)
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT customer, invoice_no, model, serial_no, osid, store_name
+                    FROM osid_data
+                    WHERE TRIM(mobile_no) = %s
+                    ORDER BY date DESC
+                """, (mobile,))
+                rows = cur.fetchall()
+        finally:
+            conn.close()
 
-                pickle_mtime = os.path.getmtime(CACHE_FILE)
-                
-                with CACHE_LOCK:
-                    CUSTOMER_INDEX['data'] = index
-                    CUSTOMER_INDEX['last_mod'] = pickle_mtime
-                
-                print(f"[CACHE] INSTANT: Loaded {len(index)} records from pickle in {time.time() - t0:.4f}s.")
-                
-                # If Excel exists and is newer than pickle, refresh in background
-                if os.path.exists(EXCEL_FILE):
-                    excel_mtime = os.path.getmtime(EXCEL_FILE)
-                    if excel_mtime > pickle_mtime and not REFRESH_THREAD_RUNNING:
-                        print("[CACHE] Excel newer than pickle — background refresh triggered.")
-                        REFRESH_THREAD_RUNNING = True
-                        threading.Thread(target=_refresh_cache_from_excel_background).start()
-                
-                return index
-            except Exception as e:
-                print(f"[CACHE] Pickle Read Failed: {e}")
+        if not rows:
+            return None
 
-        # 3. No pickle — load from Excel if available
-        if os.path.exists(EXCEL_FILE):
-            if not REFRESH_THREAD_RUNNING:
-                print("[CACHE] No pickle — triggering async Excel load...")
-                REFRESH_THREAD_RUNNING = True
-                threading.Thread(target=_refresh_cache_from_excel_background).start()
-            return {}
-
-        print("[CACHE] Neither pickle nor Excel found — returning empty.")
-        return {}
+        name = rows[0]['customer'] or 'Unknown'
+        products = [
+            {
+                'invoice': r['invoice_no'] or '',
+                'model':   r['model']      or '',
+                'serial':  r['serial_no']  or '',
+                'osid':    r['osid']       or '',
+                'branch':  r['store_name'] or 'Main Branch',
+            }
+            for r in rows
+        ]
+        return {'name': name, 'products': products}
 
     except Exception as e:
-        print(f"Indexing Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return {}
+        logging.error(f'[LOOKUP] DB lookup error: {e}')
+        return None
 
-def rebuild_index(df):
-    """Converts DataFrame to a dictionary indexed by mobile for instant lookup"""
-    index = {}
-    
-    # Identify key columns
-    name_col = col_lookup(df, ["customer", "customer name"])
-    inv_col = col_lookup(df, ["invoice no", "invoice", "invoice_no"])
-    mod_col = col_lookup(df, ["model"])
-    ser_col = col_lookup(df, ["serial no", "serialno", "serial_no"])
-    osid_col = col_lookup(df, ["osid"])
-    br_col = col_lookup(df, ["store name", "store_name", "branch", "branch name"])
 
-    # Convert to records for faster iteration
-    records = df.to_dict('records')
-    for row in records:
-        mob = str(row.get('target_mobile_str', ''))
-        if not mob: continue
-        
-        if mob not in index:
-            index[mob] = {
-                "name": str(row.get(name_col, "Unknown")),
-                "products": []
-            }
-        
-        index[mob]["products"].append({
-            "invoice": str(row.get(inv_col, "")),
-            "model": str(row.get(mod_col, "")),
-            "serial": str(row.get(ser_col, "")),
-            "osid": str(row.get(osid_col, "")),
-            "branch": str(row.get(br_col, "Main Branch"))
-        })
-    return index
+# Stubs — kept so any remaining internal references don't break
+def load_excel_data():
+    return {}
 
 def col_lookup(df, variations):
     for v in variations:
-        if v in df.columns:
+        if v in (df.columns if hasattr(df, 'columns') else []):
             return v
     return None
+
 
 @app.route('/lookup-customer', methods=['POST'])
 @login_required
 def lookup_customer():
     data = request.json
-    mobile = data.get('mobile', '').strip()
-    
-    if not mobile or len(mobile) != 10:
-        return jsonify({"success": False, "message": "Invalid Number (Must be 10 digits)"})
+    if not data:
+        return jsonify({"success": False, "message": "Invalid request body."})
 
-    # Check if data is still loading in background
-    if REFRESH_THREAD_RUNNING and not CUSTOMER_INDEX['data']:
-        print(f"[LOOKUP] Data still loading, returning loading status")
-        return jsonify({"success": False, "loading": True, "message": "Customer data is loading, please wait..."})
-
-    # Get Index (Triggers stale checks if needed)
+    # --- INPUT VALIDATION ---
     try:
-        index = load_excel_data()
-    except Exception as e:
-        print(f"[LOOKUP] Excel load error: {e}")
-        return jsonify({"success": False, "loading": True, "message": "Data loading in progress, please retry..."})
-    
-    if not index:
-        print(f"[LOOKUP] Empty index returned")
-        return jsonify({"success": False, "loading": True, "message": "Customer database is loading, please wait and retry..."})
-    
-    customer_data = index.get(mobile)
-    
+        mobile = validate_mobile(data.get('mobile', ''))
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)})
+
+    # Query PostgreSQL osid_data table directly
+    customer_data = lookup_customer_from_db(mobile)
+
     if customer_data:
+        logging.info(f"[LOOKUP] Found {len(customer_data['products'])} product(s) for mobile {mobile}")
         return jsonify({
             "success": True,
             "customer_name": customer_data['name'],
             "products": customer_data['products']
         })
     else:
-        print(f"[LOOKUP FAIL] Mobile: {mobile} | Index Size: {len(index)}")
-        if index:
-             print(f"[LOOKUP DEBUG] Sample Keys: {list(index.keys())[:5]}")
-        return jsonify({"success": False})
+        logging.info(f"[LOOKUP] No records found for mobile: {mobile}")
+        return jsonify({"success": False, "message": "No customer found with this mobile number."})
 
 def send_email_notification(claim_data, files=None):
     try:
@@ -1053,10 +1149,6 @@ def send_email_notification(claim_data, files=None):
 # ROUTES
 # ----------------------
 
-
-
-
-
 @app.route('/submit-claim', methods=['GET', 'POST'])
 @admin_required
 def submit_claim():
@@ -1066,55 +1158,78 @@ def submit_claim():
     # Handle POST
     try:
         data = request.form
-        customer_name = data.get('customer_name')
-        mobile = data.get('mobile')
-        address = data.get('address')
-        
+
+        # --- INPUT VALIDATION ---
+        try:
+            customer_name = sanitize_text(data.get('customer_name', ''), max_len=MAX_TEXT_SHORT, field_name='Customer name', sheet_destined=True)
+            mobile        = validate_mobile(data.get('mobile', ''))
+            address       = sanitize_text(data.get('address', ''), max_len=MAX_TEXT_LONG, field_name='Address', allow_newlines=True, sheet_destined=True)
+            if not customer_name:
+                return jsonify({"success": False, "message": "Customer name is required."})
+        except ValueError as e:
+            return jsonify({"success": False, "message": str(e)})
+        # --- END VALIDATION ---
+
         claims_json = data.get('claims_data')
         if not claims_json:
-            # Fallback for old requests? Or just Error.
-            # If standard flow used old 'selected_product', we could support it, 
-            # but we updated frontend so assuming data comes as claims_data.
-            # Let's check if 'selected_product' exists just in case of cached frontend.
             if data.get('selected_product'):
                 import json
-                # Convert old format to list
                 prod = json.loads(data.get('selected_product'))
                 prod['issue'] = data.get('issue')
-                prod['file_key'] = 'files' # Old file key
+                prod['file_key'] = 'files'
                 claims_json = json.dumps([prod])
             else:
-                 return jsonify({"success": False, "message": "No claims data received"})
-            
+                return jsonify({"success": False, "message": "No claims data received"})
+
         import json
         claims_list = json.loads(claims_json)
-        
+
+        # Enforce maximum claims per submission
+        if not isinstance(claims_list, list) or len(claims_list) == 0:
+            return jsonify({"success": False, "message": "claims_data must be a non-empty list."})
+        if len(claims_list) > 10:
+            return jsonify({"success": False, "message": "Maximum 10 claims allowed per submission."})
+
         results = []
-        
+
         # Ensure upload folder exists
         if not os.path.exists(UPLOAD_FOLDER):
             os.makedirs(UPLOAD_FOLDER)
-        
+
         for idx, item in enumerate(claims_list):
-            # Files
-            file_key = item.get('file_key')
-            uploaded_files = request.files.getlist(file_key) if file_key else []
-            # Check fallback for old frontend
-            if not uploaded_files and file_key == 'files':
-                 uploaded_files = request.files.getlist('files')
+            if not isinstance(item, dict):
+                return jsonify({"success": False, "message": f"claims_data[{idx}] must be an object."})
+
+            # Sanitize claim item fields
+            try:
+                item_issue   = sanitize_text(item.get('issue', ''),   max_len=MAX_TEXT_DEFAULT, field_name=f'Issue[{idx}]',          sheet_destined=True)
+                item_model   = sanitize_text(item.get('model', ''),   max_len=MAX_TEXT_SHORT,   field_name=f'Model[{idx}]',           sheet_destined=True)
+                item_serial  = sanitize_text(item.get('serial', ''),  max_len=MAX_TEXT_SHORT,   field_name=f'Serial number[{idx}]',   sheet_destined=True)
+                item_osid    = sanitize_text(item.get('osid', ''),    max_len=MAX_TEXT_SHORT,   field_name=f'OSID[{idx}]',            sheet_destined=True)
+                item_invoice = sanitize_text(item.get('invoice', ''), max_len=MAX_TEXT_SHORT,   field_name=f'Invoice number[{idx}]',  sheet_destined=True)
+                item_branch  = sanitize_text(item.get('branch', 'Main Branch'), max_len=MAX_TEXT_SHORT, field_name=f'Branch[{idx}]', sheet_destined=True)
+                item_fkey    = sanitize_text(item.get('file_key', ''), max_len=50,              field_name=f'file_key[{idx}]')
+            except ValueError as e:
+                return jsonify({"success": False, "message": str(e)})
+
+            # Files – validate each upload before saving
+            uploaded_files = request.files.getlist(item_fkey) if item_fkey else []
+            if not uploaded_files and item_fkey == 'files':
+                uploaded_files = request.files.getlist('files')
 
             saved_paths = []
-            
             for f in uploaded_files:
-                if f.filename:
-                    # Unique filename
+                if f and f.filename:
+                    try:
+                        validate_file_upload(f, field_name=f'Attachment[{idx}]')
+                    except ValueError as e:
+                        return jsonify({"success": False, "message": str(e)})
                     fn = secure_filename(f"{int(time.time())}_{idx}_{f.filename}")
                     path = os.path.join(UPLOAD_FOLDER, fn)
                     f.save(path)
                     saved_paths.append(path)
 
-            # Claim Object
-            # Ensure unique ID slightly if processing fast
+            # Build claim object with sanitized values
             unique_suffix = int(time.time()) + idx
             new_claim = {
                 "Claim ID": f"CLM-{unique_suffix}",
@@ -1122,35 +1237,60 @@ def submit_claim():
                 "Customer Name": customer_name,
                 "Mobile Number": mobile,
                 "Address": address,
-                "Product": item.get('model', ''),
-                "Invoice Number": item.get('invoice', ''),
-                "Serial Number": item.get('serial', ''),
-                "Model": item.get('model', ''),
-                "OSID": item.get('osid', ''),
-                "Branch": item.get('branch', 'Main Branch'),
-                "Issue": item.get('issue', ''),
+                "Product": item_model,
+                "Invoice Number": item_invoice,
+                "Serial Number": item_serial,
+                "Model": item_model,
+                "OSID": item_osid,
+                "Branch": item_branch,
+                "Issue": item_issue,
                 "Status": "Submitted"
             }
-            
-            # Sync
+
             print(f"Syncing Claim {idx+1}/{len(claims_list)}: {new_claim['Claim ID']}")
-            sync_to_google_sheet_dict(new_claim)
-            
-            # Email
+            sync_to_database_dict(new_claim)
+
+            # Push to Google Sheets in background (only basic complaint columns)
+            web_app_url = os.environ.get("WEB_APP_URL")
+            if web_app_url:
+                import threading, requests
+                def _push_to_sheet(url, data):
+                    # Column names MUST match the actual Google Sheet headers exactly
+                    sheet_payload = {
+                        "Claim ID":       data.get("Claim ID"),
+                        "Submitted Date": data.get("Date"),          # Sheet uses "Submitted Date"
+                        "Customer Name":  data.get("Customer Name"),
+                        "Mobile":         data.get("Mobile Number"),  # Sheet uses "Mobile"
+                        "Branch":         data.get("Branch"),
+                        "Product":        data.get("Product"),
+                        "Issue":          data.get("Issue"),
+                        "Status":         data.get("Status"),
+                        "OSID":           data.get("OSID"),
+                        "Serial Number":  data.get("Serial Number"),
+                        "Invoice Number": data.get("Invoice Number"),
+                    }
+                    # Remove None values
+                    sheet_payload = {k: v for k, v in sheet_payload.items() if v is not None}
+                    try:
+                        print(f"[SHEET_PUSH] Pushing new claim to Google Sheets: {sheet_payload.get('Claim ID')}")
+                        response = requests.post(url, json=sheet_payload, timeout=15)
+                        print(f"[SHEET_PUSH] Response: {response.status_code} - {response.text}")
+                    except Exception as e:
+                        print(f"[SHEET_PUSH] Failed: {e}")
+                threading.Thread(target=_push_to_sheet, args=(web_app_url, new_claim)).start()
+
             send_email_notification({
                 "customer_name": customer_name,
                 "mobile_no": mobile,
                 "address": address,
-                "model": item.get('model'),
-                "serial_no": item.get('serial'),
-                "osid": item.get('osid'),
-                "invoice_no": item.get('invoice'),
-                "issue": item.get('issue')
+                "model": item_model,
+                "serial_no": item_serial,
+                "osid": item_osid,
+                "invoice_no": item_invoice,
+                "issue": item_issue
             }, saved_paths)
-            
+
             results.append(new_claim["Claim ID"])
-            
-            # Delay to be polite to Google Script API if needed
             time.sleep(0.5)
 
         invalidate_cache()
@@ -1162,11 +1302,16 @@ def submit_claim():
         traceback.print_exc()
         return jsonify({"success": False, "message": str(e)})
 
-@app.route('/claim/<string:id>', methods=['GET']) # Using String ID now
+@app.route('/claim/<string:id>', methods=['GET'])
 @login_required
 def get_claim(id):
-    # Fetch all and filter (inefficient but works for small-medium sheets)
-    claims = fetch_claims_from_sheet()
+    # --- INPUT VALIDATION ---
+    try:
+        id = validate_claim_id(id, field_name='claim id')
+    except ValueError:
+        return jsonify({"error": "Invalid claim ID format."}), 400
+    # --- END VALIDATION ---
+    claims = fetch_claims_from_db()
     
     # Find claim by Claim ID (id) or numeric ID? User passes int ID earlier, but now strings CLM-...
     # Let's support both if possible or just filter by Claim ID
@@ -1181,7 +1326,9 @@ def get_claim(id):
     if not found:
         return jsonify({"error": "Not found"}), 404
 
-    assert found is not None
+    # Guard: found must be set (already checked above, but assert removed for safety)
+    if found is None:
+        return jsonify({"error": "Not found"}), 404
 
     # Convert Wrapper to dict for frontend
     # We need to map back to the keys JS expects
@@ -1231,22 +1378,64 @@ def get_claim(id):
 @app.route('/update-claim/<string:id>', methods=['POST'])
 @login_required
 def update_claim(id):
-    # Fetch existing to preserve other fields?
-    # Actually, we can just send the PATCH data + ID to Google ID upsert
+    # --- INPUT VALIDATION: URL param ---
+    try:
+        id = validate_claim_id(id, field_name='claim id')
+    except ValueError:
+        return jsonify({'success': False, 'message': 'Invalid claim ID format.'}), 400
+
     data = request.json
-    
+    if not data or not isinstance(data, dict):
+        return jsonify({'success': False, 'message': 'Invalid JSON body.'}), 400
+
+    # --- INPUT VALIDATION: fields ---
+    try:
+        if 'status' in data:
+            validate_status(data['status'])   # raises if not in whitelist
+        for date_field in ('date', 'follow_up_date', 'approval_mail_date',
+                           'mail_sent_to_store_date', 'invoice_generated_date',
+                           'invoice_sent_osg_date', 'claim_settled_date'):
+            if date_field in data:
+                data[date_field] = validate_date_str(data[date_field], field_name=date_field)
+        for text_field in ('follow_up_notes', 'remarks'):
+            if text_field in data:
+                data[text_field] = sanitize_text(data[text_field], max_len=MAX_TEXT_LONG,
+                                                  field_name=text_field, allow_newlines=True,
+                                                  sheet_destined=True)
+        for short_field in ('assigned_staff', 'sr_no'):
+            if short_field in data:
+                data[short_field] = sanitize_text(data[short_field], max_len=MAX_TEXT_SHORT,
+                                                   field_name=short_field, sheet_destined=True)
+        if 'feedback_rating' in data:
+            val_str = str(data['feedback_rating']).strip()
+            if val_str in ['0', '', 'None', 'null', '0.0']:
+                del data['feedback_rating']
+            else:
+                data['feedback_rating'] = validate_integer_range(data['feedback_rating'], 1, 5,
+                                                                  field_name='feedback_rating')
+        for bool_field in ('repair_feedback_completed', 'replacement_confirmation',
+                           'replacement_osg_approval', 'replacement_mail_store',
+                           'replacement_invoice_gen', 'replacement_invoice_sent',
+                           'replacement_settlement_mail', 'replacement_settled_accounts', 'complete'):
+            if bool_field in data:
+                data[bool_field] = validate_boolean(data[bool_field], field_name=bool_field)
+    except ValueError as e:
+        logging.warning(f"[UPDATE_CLAIM_INVALID] {e} on claim {id} from IP {get_remote_address()}")
+        return jsonify({'success': False, 'message': str(e)}), 400
+    # --- END VALIDATION ---
+
     # Map JS keys back to Sheet Headers
     payload = {
         "Claim ID": id
     }
-    
+
     if 'status' in data: payload["Status"] = data['status']
     if 'date' in data: payload["Date"] = data['date']
     if 'follow_up_notes' in data: payload["Follow Up - Notes"] = data['follow_up_notes']
     if 'remarks' in data: payload["Remarks"] = data['remarks']
     if 'assigned_staff' in data: payload["Assigned Staff"] = data['assigned_staff']
-    if 'sr_no' in data: payload["SR No"] = data['sr_no']
-    
+    if 'sr_no' in data and data['sr_no'].strip(): payload["SR No"] = data['sr_no']  # Only set SR No if non-empty
+
     if 'follow_up_date' in data: payload["Follow Up - Dates"] = data['follow_up_date']
     if 'approval_mail_date' in data: payload["Approval Mail Received Date"] = data['approval_mail_date']
     if 'mail_sent_to_store_date' in data: payload["Mail Sent To Store Date"] = data['mail_sent_to_store_date']
@@ -1260,9 +1449,106 @@ def update_claim(id):
     if 'feedback_rating' in data: payload["Feedback Rating"] = f"'{data['feedback_rating']}"
     
     # Find existing claim to check for existing dates
-    all_claims = fetch_claims_from_sheet()
+    all_claims = fetch_claims_from_db()
     existing_claim = next((c for c in all_claims if str(c.claim_id) == str(id)), None)
     
+    # --- WHATSAPP NOTIFICATION LOGIC ---
+    if 'status' in data:
+        new_status = data['status'].strip().upper()
+        existing_status = (existing_claim.status or "").strip().upper() if existing_claim else ""
+        last_notified_status = (existing_claim.data.get("Last_Notified_Status") or "").strip().upper() if existing_claim else ""
+        
+        # Helper to check boolean fields for Replacement Workflow
+        def is_checked(bool_key, db_key):
+            if bool_key in data:
+                return data[bool_key]
+            if existing_claim and existing_claim.data:
+                val = existing_claim.data.get(db_key)
+                if val is not None and str(val).strip() != '':
+                    return str(val).strip().lower() in ['yes', 'true', '1']
+            return False
+
+        repl_confirmed = is_checked('replacement_confirmation', 'Customer Confirmation')
+        repl_osg = is_checked('replacement_osg_approval', 'Approval Mail Received From Onsitego (Yes/No)')
+        repl_mail = is_checked('replacement_mail_store', 'Mail Sent To Store (Yes/No)')
+
+        should_notify = False
+        
+        if new_status != existing_status and new_status != last_notified_status:
+            if new_status in ["REGISTERED", "REPAIR COMPLETED", "REJECTED"]:
+                should_notify = True
+                
+        if new_status == "REPLACEMENT APPROVED" and last_notified_status != "REPLACEMENT APPROVED":
+            if repl_confirmed and repl_osg and repl_mail:
+                should_notify = True
+
+        if should_notify:
+                # --- CUTOFF DATE GATE ---
+                # Block notifications for claims registered before the cutoff date
+                claim_registered_date = existing_claim.created_at if existing_claim else None
+                if claim_registered_date:
+                    # Strip timezone info for comparison if present
+                    reg_date_naive = claim_registered_date.replace(tzinfo=None)
+                    if reg_date_naive < WHATSAPP_CUTOFF_DATE:
+                        logging.info(
+                            f"[WHATSAPP_BLOCKED] Claim {id} registered on "
+                            f"{reg_date_naive.strftime('%Y-%m-%d')} is before cutoff "
+                            f"{WHATSAPP_CUTOFF_DATE.strftime('%Y-%m-%d')}. Skipping notification."
+                        )
+                    else:
+                        # Registration date is on or after the cutoff — send message
+                        from services.whatsapp_service import send_whatsapp_message
+                        mobile = str(existing_claim.mobile_no) if existing_claim and existing_claim.mobile_no else data.get('mobile', '')
+                        c_name = (existing_claim.customer_name if existing_claim and existing_claim.customer_name else data.get('customer_name', '')).strip()
+                        if not c_name: c_name = "Customer"
+                        
+                        c_model = (existing_claim.model if existing_claim and existing_claim.model else data.get('model', '')).strip()
+                        if not c_model: c_model = "your product"
+                        
+                        c_sr_no = (existing_claim.sr_no if existing_claim and existing_claim.sr_no else data.get('sr_no', '')).strip()
+                        if not c_sr_no:
+                            c_sr_no = id  # Fallback to Claim ID (e.g. CLM-123) if SR No is missing
+
+                        if new_status == "REPAIR COMPLETED":
+                            template_to_use = "myg_onsitego_repair_completed_main"
+                            template_params = [c_name, c_sr_no]
+                        elif new_status == "REPLACEMENT APPROVED":
+                            template_to_use = "myg_onsitego_replacement_main"
+                            template_params = [c_name, c_model]
+                        elif new_status == "REJECTED":
+                            template_to_use = "osg_clm_reject"
+                            template_params = [c_name]
+                        else:
+                            template_to_use = "myg_onsitego_registered_main"
+                            template_params = [c_name, c_model, c_sr_no]
+
+                        resp = send_whatsapp_message(
+                            mobile=mobile,
+                            template_name=template_to_use,
+                            params=template_params
+                        )
+                        print(f"WhatsApp Trigger Response ({new_status}):", resp)
+                        
+                        # DEBUG LOGGING FOR WHATSAPP
+                        try:
+                            with open("whatsapp_debug_log.txt", "a") as f:
+                                f.write(f"--- WHATSAPP TRIGGER ---\n")
+                                f.write(f"Status: {new_status}\n")
+                                f.write(f"Template: {template_to_use}\n")
+                                f.write(f"Params: {template_params}\n")
+                                f.write(f"Response: {resp}\n\n")
+                        except Exception:
+                            pass
+                        
+                        # Only update Last_Notified_Status if message was successfully sent (not blocked and API returned 2xx)
+                        if not resp.get("blocked") and resp.get("status_code") in [200, 201, 202]:
+                            payload["Last_Notified_Status"] = new_status
+                else:
+                    logging.warning(f"[WHATSAPP_BLOCKED] Claim {id} has no registration date. Skipping notification.")
+                # --- END CUTOFF DATE GATE ---
+
+    # ------------------------------------
+
     import datetime
     import pytz
     
@@ -1317,7 +1603,18 @@ def update_claim(id):
         if should_update_date('replacement_settlement_mail', existing_date):
             payload["Settlement Mail to Accounts Date"] = today_str
 
-    if 'replacement_settled_accounts' in data: payload["Settled With Accounts (Yes/No)"] = fmt_bool(data['replacement_settled_accounts'])
+    if 'replacement_settled_accounts' in data: 
+        is_settled = data['replacement_settled_accounts']
+        payload["Settled With Accounts (Yes/No)"] = fmt_bool(is_settled)
+        
+        # BUSINESS RULE: If Settled with Accounts is checked, Settlement Mail to Accounts MUST be checked.
+        if is_settled:
+            payload["Settlement Mail to Accounts(Yes/No)"] = "Yes"
+            
+            # Only set the date if 'Settlement Mail to Accounts' was NOT ALREADY Yes
+            existing_mail_checked = str(existing_claim.data.get("Settlement Mail to Accounts(Yes/No)")).strip().lower() if existing_claim else "no"
+            if existing_mail_checked != "yes":
+                payload["Settlement Mail to Accounts Date"] = today_str
     
     # Complete flag
     if 'complete' in data: payload["Complete (Yes/No)"] = fmt_bool(data['complete'])
@@ -1341,10 +1638,45 @@ def update_claim(id):
 
     # Sync
     try:
-        sync_to_google_sheet_dict(payload, background=False)
+        sync_to_database_dict(payload, background=False)
     except Exception as e:
         print(f"Update Sync Error: {e}")
         return jsonify({"success": False})
+
+    # --- GOOGLE SHEET WEBHOOK UPDATE ---
+    web_app_url = os.environ.get("WEB_APP_URL")
+    if web_app_url:
+        import threading
+        import requests
+        
+        def _update_sheet(url, update_payload, existing_claim_id, existing_sr):
+            try:
+                sheet_data = update_payload.copy()
+                
+                # Always include the Claim ID so Apps Script can find the row
+                sheet_data["Claim ID"] = existing_claim_id
+                
+                # Remove empty SR No from payload — don't accidentally blank it in the sheet
+                if "SR No" in sheet_data and not str(sheet_data.get("SR No", "")).strip():
+                    del sheet_data["SR No"]
+                
+                # ALWAYS send legacy lookup hint if the old row had a CLM value in SR No.
+                # This lets the Apps Script find the row via the SR No column even when
+                # we're also writing a new real SR No at the same time.
+                if existing_sr and existing_sr.startswith("CLM-"):
+                    sheet_data["_legacy_sr_lookup"] = existing_sr
+                
+                real_sr = str(update_payload.get("SR No", "")).strip()
+                print(f"[SHEET_UPDATE] Claim ID: {existing_claim_id} | SR No: {real_sr or '(unchanged)'} | Legacy lookup: {existing_sr or 'none'}")
+                response = requests.post(url, json=sheet_data, timeout=15)
+                print(f"[SHEET_UPDATE] Response: {response.status_code} - {response.text}")
+            except Exception as e:
+                print(f"[SHEET_UPDATE] Failed: {e}")
+                
+        # Get the existing SR No from before this update
+        existing_sr_no = (existing_claim.sr_no or "").strip() if existing_claim else ""
+        existing_claim_id = (existing_claim.claim_id or id) if existing_claim else id
+        threading.Thread(target=_update_sheet, args=(web_app_url, payload, existing_claim_id, existing_sr_no)).start()
 
     # Invalidate Cache so next fetch gets fresh data
     global CLAIMS_CACHE
@@ -1352,40 +1684,108 @@ def update_claim(id):
 
     return jsonify({"success": True})
 
-def sync_to_google_sheet_dict(payload, background=True):
+@app.route('/api/webhook/sheet-update', methods=['POST'])
+def sheet_webhook_update():
     """
-    Sends dict payload to Google Sheet depending on background flag.
-    Keys must match headers exactly or normalized logic in GAS.
+    Webhook endpoint to receive updates directly from Google Sheets via Apps Script onEdit trigger.
     """
-    if not WEB_APP_URL:
-        return
+    try:
+        data = request.json
+        if not data or not data.get("Claim ID"):
+            return jsonify({"success": False, "message": "Missing Claim ID"}), 400
         
+        # Sync the updated data from sheet into database
+        sync_to_database_dict(data, background=False)
+        
+        # Invalidate Cache so next fetch gets fresh data
+        global CLAIMS_CACHE
+        CLAIMS_CACHE['last_updated'] = 0
+        
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"Webhook update error: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+def sync_to_database_dict(payload, background=True):
+    """
+    Sends dict payload to PostgreSQL depending on background flag.
+    Keys must match expected headers.
+    """
+    import datetime
     # Auto-add timestamp
     payload["Last Updated Timestamp"] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     def _sync():
         try:
-            print(f"Starting Background Sync for Claim {payload.get('Claim ID', 'Unknown')}...")
-            response = requests.post(WEB_APP_URL, json=payload, timeout=20)
-            print(f"Sync Status: {response.status_code}, Response: {response.text}")
+            print(f"Starting Database Upsert for Claim {payload.get('Claim ID', 'Unknown')}...")
+            from services.pg_sync import upsert_claim_to_postgres
+            result = upsert_claim_to_postgres(payload)
+            if result.get("success"):
+                print(f"Upsert Status: Success")
+            else:
+                print(f"Database Upsert Failed: {result.get('error')}")
         except Exception as e:
-            print(f"Google Sheet Sync Failed: {e}")
+            print(f"Database Upsert Failed Exception: {e}")
 
     # Start background thread
     if background:
+        import threading
         threading.Thread(target=_sync).start()
     else:
         _sync()
 
+@app.route('/api/notify-spare-parts/<string:id>', methods=['POST'])
+@login_required
+def notify_spare_parts(id):
+    try:
+        from services.whatsapp_service import send_whatsapp_message
+        all_claims = fetch_claims_from_db()
+        existing_claim = next((c for c in all_claims if str(c.claim_id) == str(id)), None)
+        
+        if not existing_claim:
+            return jsonify({'success': False, 'message': 'Claim not found'})
+            
+        mobile = str(existing_claim.mobile_no) if existing_claim.mobile_no else ""
+        c_name = str(existing_claim.customer_name).strip() if existing_claim.customer_name else "Customer"
+        c_model = str(existing_claim.model).strip() if existing_claim.model else "your product"
+        
+        resp = send_whatsapp_message(
+            mobile=mobile,
+            template_name="myg_onsitego_part_order_main",
+            params=[c_name, c_model]
+        )
+        
+        if not resp.get("blocked") and resp.get("status_code") in [200, 201, 202]:
+            timestamp = datetime.datetime.now().strftime('%d-%m-%Y %I:%M %p')
+            note = f"[{timestamp}] Sent 'Spare Parts Pending' WhatsApp notification to customer."
+            
+            old_history = existing_claim.follow_up_notes or ""
+            new_history = f"{old_history}\n{note}" if str(old_history).strip() else note
+            
+            payload = {
+                "Claim ID": id,
+                "Follow Up - Notes": new_history,
+            }
+            if PG_AVAILABLE:
+                from services.pg_sync import upsert_claim_to_postgres
+                upsert_claim_to_postgres(payload)
+                invalidate_cache()
+                
+            return jsonify({'success': True, 'message': 'Notification sent successfully!'})
+        else:
+            return jsonify({'success': False, 'message': resp.get("error", "Failed to send notification")})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
 
 # ----------------------
 # DEBUG ENDPOINT
 # ----------------------
 @app.route('/debug/sheet-columns')
+@admin_required
 def debug_sheet_columns():
     """Debug endpoint to see actual column names and sample data"""
     try:
-        claims = fetch_claims_from_sheet()
+        claims = fetch_claims_from_db()
         if len(claims) > 0:
             first_claim = claims[0]
             return jsonify({
@@ -1407,10 +1807,11 @@ def debug_sheet_columns():
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/debug/gst-claims')
+@admin_required
 def debug_gst_claims():
     """Debug endpoint to see all GST Invoice Billed claims and their date fields"""
     try:
-        claims = fetch_claims_from_sheet(force_refresh=True)
+        claims = fetch_claims_from_db(force_refresh=True)
         now = get_ist_now().replace(tzinfo=None)
         gst_claims = []
         for c in claims:
@@ -1450,7 +1851,7 @@ def analytics_dashboard():
 @app.route('/claim-status')
 @login_required
 def claim_status():
-    claims = fetch_claims_from_sheet()
+    claims = fetch_claims_from_db()
     now = get_ist_now().replace(tzinfo=None)
 
     # KPI stats
@@ -1480,21 +1881,26 @@ def claim_status():
         repl_age = age
         if settled_date_raw and str(settled_date_raw).strip() not in ('', 'nan', 'None'):
             try:
-                settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%m-%d')
+                settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%d-%m')
                 repl_age = (now - settled_dt).days
             except Exception:
                 try:
-                    settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%d-%m-%Y')
+                    settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%m-%d')
                     repl_age = (now - settled_dt).days
                 except Exception:
-                    repl_age = age
+                    try:
+                        settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%d-%m-%Y')
+                        repl_age = (now - settled_dt).days
+                    except Exception:
+                        repl_age = age
 
         status = (c.status or "").strip().lower()
 
         if status == "rejected":
             report_stats['rejected'] += 1
             report_stats['grand_total_status'] += 1
-        elif c.complete or status in ["repair completed", "closed", "no issue/oncall resolution", "no issue", "oncall resolution"]:
+        elif c.complete or status in ["repair completed", "closed", "no issue/oncall resolution",
+                                       "no issue", "oncall resolution", "cancelled"]:
             report_stats['completed'] += 1
             report_stats['grand_total_status'] += 1
         else:
@@ -1532,18 +1938,18 @@ def claim_status():
                     if not raw or str(raw).strip() in ('', 'nan', 'None'): return None
                     s = str(raw).strip()[:10]
                     dt = None
-                    for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
+                    for fmt in ('%Y-%d-%m', '%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
                         try:
                             dt = datetime.datetime.strptime(s, fmt)
                             break
-                        except: continue
+                        except (ValueError, TypeError): continue
                     
                     # If it's a future date, Google Sheets likely interpreted DD-MM as MM-DD
                     if dt and (dt - now).days > 1:
                         try:
                             if '-' in s and len(s.split('-')[0]) == 4:
                                 dt = datetime.datetime.strptime(s, '%Y-%d-%m')
-                        except: pass
+                        except (ValueError, TypeError): pass
                     return dt
 
                 inv_gen_dt = _parse_date(c.invoice_generated_date)
@@ -1578,13 +1984,29 @@ def claim_status_lookup():
     """Search claims by mobile number or claim ID for customer care"""
     try:
         data = request.json
-        search_type = data.get('search_type', 'mobile')
-        search_value = data.get('search_value', '').strip()
-        
+        if not data:
+            return jsonify({'success': False, 'message': 'Invalid request body.'})
+
+        # --- INPUT VALIDATION ---
+        try:
+            search_type = validate_search_type(data.get('search_type', 'mobile'))
+            search_value = sanitize_text(data.get('search_value', ''), max_len=50,
+                                         field_name='search_value')
+        except ValueError as e:
+            return jsonify({'success': False, 'message': str(e)})
+
         if not search_value:
             return jsonify({'success': False, 'message': 'Search value is required'})
+
+        # Additional type-specific validation
+        if search_type == 'mobile':
+            try:
+                search_value = validate_mobile(search_value)
+            except ValueError as e:
+                return jsonify({'success': False, 'message': str(e)})
+        # --- END VALIDATION ---
         
-        claims = fetch_claims_from_sheet()
+        claims = fetch_claims_from_db()
         matched = []
         
         def parse_bool(val):
@@ -1649,7 +2071,7 @@ def get_analytics_data():
     Returns structured JSON with all necessary fields
     """
     try:
-        claims = fetch_claims_from_sheet()
+        claims = fetch_claims_from_db()
         
         # Transform claims for analytics
         analytics_claims = []
@@ -1659,8 +2081,14 @@ def get_analytics_data():
             if claim.claim_settled_date and (claim.data.get("Date") or claim.data.get("Submitted Date")):
                 try:
                     s_date = claim.data.get("Date") or claim.data.get("Submitted Date")
-                    submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%m-%d')
-                    settled = datetime.datetime.strptime(str(claim.claim_settled_date).split()[0], '%Y-%m-%d')
+                    try:
+                        submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%d-%m')
+                    except Exception:
+                        submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%m-%d')
+                    try:
+                        settled = datetime.datetime.strptime(str(claim.claim_settled_date).split()[0], '%Y-%d-%m')
+                    except Exception:
+                        settled = datetime.datetime.strptime(str(claim.claim_settled_date).split()[0], '%Y-%m-%d')
                     tat = (settled - submitted).days
                 except:
                     tat = None
@@ -1730,8 +2158,6 @@ def get_analytics_data():
             'claims': []
         })
 
-
-
 # ----------------------
 # REPORTS & TOOLS ROUTES
 # ----------------------
@@ -1747,16 +2173,35 @@ def reports_tools():
 def generate_report_1():
     import xlsxwriter
     try:
-        report_date_str = request.form.get('report_date')
-        prev_date_str = request.form.get('prev_date')
-        
-        curr_sales_file = request.files.get('curr_sales')
-        prev_sales_file = request.files.get('prev_sales')
-        product_sales_file = request.files.get('product_sales') # Product Sales
+        report_date_str = request.form.get('report_date', '').strip()
+        prev_date_str   = request.form.get('prev_date', '').strip()
+
+        # --- INPUT VALIDATION ---
+        try:
+            report_date_str = validate_date_str(report_date_str, field_name='report_date')
+            prev_date_str   = validate_date_str(prev_date_str,   field_name='prev_date')
+            if not report_date_str or not prev_date_str:
+                flash("Report date and previous date are required.", "error")
+                return redirect(url_for('reports_tools'))
+        except ValueError as e:
+            flash(str(e), "error")
+            return redirect(url_for('reports_tools'))
+
+        curr_sales_file    = request.files.get('curr_sales')
+        prev_sales_file    = request.files.get('prev_sales')
+        product_sales_file = request.files.get('product_sales')
 
         if not curr_sales_file or not product_sales_file or not prev_sales_file:
             flash("All files (Current Sales, Previous Sales, Product Sales) are required.", "error")
             return redirect(url_for('reports_tools'))
+
+        for upload, label in [(curr_sales_file, 'Current Sales'), (prev_sales_file, 'Previous Sales'), (product_sales_file, 'Product Sales')]:
+            try:
+                validate_file_upload(upload, field_name=label)
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(url_for('reports_tools'))
+        # --- END VALIDATION ---
 
         # Load Defaults (Assumed to be in BASE_DIR)
         store_list_path = os.path.join(BASE_DIR, "myG All Store.xlsx")
@@ -2303,7 +2748,6 @@ def generate_report_1():
         flash(f"Error generating report: {str(e)}", "error")
         return redirect(url_for('reports_tools'))
 
-
 @app.route('/reports/generate_2', methods=['POST'])
 @login_required
 def generate_report_2():
@@ -2311,13 +2755,31 @@ def generate_report_2():
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils.dataframe import dataframe_to_rows
     try:
-        selected_date_str = request.form.get('selected_date')
-        time_slot = request.form.get('time_slot')
-        book2_file = request.files.get('book2')
+        selected_date_str = request.form.get('selected_date', '').strip()
+        time_slot_raw     = request.form.get('time_slot', '').strip()
+        book2_file        = request.files.get('book2')
+
+        # --- INPUT VALIDATION ---
+        try:
+            selected_date_str = validate_date_str(selected_date_str, field_name='selected_date')
+            if not selected_date_str:
+                flash("Report date is required.", "error")
+                return redirect(url_for('reports_tools'))
+            time_slot = validate_time_slot(time_slot_raw)
+        except ValueError as e:
+            flash(str(e), "error")
+            return redirect(url_for('reports_tools'))
 
         if not book2_file:
             flash("Daily Sales Report file is required.", "error")
             return redirect(url_for('reports_tools'))
+
+        try:
+            validate_file_upload(book2_file, field_name='Daily Sales Report')
+        except ValueError as e:
+            flash(str(e), "error")
+            return redirect(url_for('reports_tools'))
+        # --- END VALIDATION ---
 
         # Feature Store List
         future_path = os.path.join(BASE_DIR, "Future Store List.xlsx")
@@ -2437,15 +2899,24 @@ def generate_report_2():
 @login_required
 def map_data():
     try:
-        osg_file = request.files.get('osg_file')
+        osg_file     = request.files.get('osg_file')
         product_file = request.files.get('product_file')
-        
+
         if not osg_file or not product_file:
             flash("Both OSG and Product files are required.", "error")
             return redirect(url_for('reports_tools'))
-            
-        osg_df = pd.read_excel(osg_file)
-        product_df = pd.read_excel(product_file, converters={'IMEI': str})
+
+        # --- INPUT VALIDATION ---
+        for upload, label in [(osg_file, 'OSG file'), (product_file, 'Product file')]:
+            try:
+                validate_file_upload(upload, field_name=label)
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(url_for('reports_tools'))
+        # --- END VALIDATION ---
+
+        osg_df     = pd.read_excel(osg_file)
+        product_df = pd.read_excel(product_file)
         
         # SKU Mapping
         sku_category_mapping = {
@@ -2454,7 +2925,7 @@ def map_data():
             ],
             "Warranty : Fan/Mixr/IrnBox/Kettle/OTG/Grmr/Geysr/Steamr/Inductn": [
                 "FAN", "MIXER", "IRON BOX", "KETTLE", "OTG", "GROOMING KIT", "GEYSER", "STEAMER", "INDUCTION",
-                "CEILING FAN", "FOOD PROCESSOR", "TOWER FAN", "PEDESTAL FAN", "INDUCTION COOKER", "ELECTRIC KETTLE", "WALL FAN", "MIXER GRINDER", "CELLING FAN"
+                "CEILING FAN", "TOWER FAN", "PEDESTAL FAN", "INDUCTION COOKER", "ELECTRIC KETTLE", "WALL FAN", "MIXER GRINDER", "CELLING FAN"
             ],
             "AC : EWP : Warranty : AC": ["AC", "AIR CONDITIONER", "AC INDOOR"],
             "HAEW : Warranty : Air Purifier/WaterPurifier": ["AIR PURIFIER", "WATER PURIFIER"],
@@ -2641,14 +3112,21 @@ def export_claims_excel():
         from openpyxl.utils import get_column_letter
 
         data = request.get_json()
-        claim_ids = data.get('claim_ids', []) if data else []
+
+        # --- INPUT VALIDATION ---
+        try:
+            raw_ids   = data.get('claim_ids', []) if data else []
+            claim_ids = validate_claim_ids_list(raw_ids)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        # --- END VALIDATION ---
 
         # Fetch all claims from cache
-        all_claims = fetch_claims_from_sheet()
+        all_claims = fetch_claims_from_db()
 
-        # Filter to only requested IDs (maintain order from request)
+        # Filter to only validated IDs
         if claim_ids:
-            id_set = set(str(cid) for cid in claim_ids)
+            id_set = set(claim_ids)
             claims = [c for c in all_claims if str(c.claim_id) in id_set]
         else:
             claims = all_claims
@@ -2775,65 +3253,435 @@ def export_claims_excel():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+# ----------------------
+# POSTGRESQL SYNC ROUTES
+# ----------------------
 
-# ----------------------
-# STARTUP TASKS
-# ----------------------
-def preload_data():
-    """Synchronous task to load data into memory on server start"""
-    print("[STARTUP] Pre-loading customer data (BLOCKING - server waits)...")
-    try:
-        result = load_excel_data()
-        if result:
-            print(f"[STARTUP] Customer data pre-loaded successfully. Index size: {len(result)}")
-        else:
-            print("[STARTUP] Customer data returned empty (Excel file may be missing)")
-    except Exception as e:
-        print(f"[STARTUP] Pre-load failed: {e}")
-        import traceback
-        traceback.print_exc()
-def cache_keep_warm():
-    """Periodic task to keep the customer data cache warm"""
-    import time as _time
-    while True:
-        _time.sleep(300)  # Every 5 minutes
+@app.route('/api/pg-status', methods=['GET'])
+@admin_required
+def api_pg_status():
+    """
+    Check PostgreSQL connectivity and return row count.
+    GET /api/pg-status
+    """
+    if not PG_AVAILABLE:
+        return jsonify({"configured": False, "error": "DATABASE_URL is not set."}), 503
+
+    info = pg_test_connection()
+    if info.get("success"):
         try:
-            with app.app_context():
-                if not CUSTOMER_INDEX['data']:
-                    print("[CACHE-WARM] Cache is cold, reloading...")
-                    load_excel_data()
-                    print(f"[CACHE-WARM] ✅ Cache rewarmed. Size: {len(CUSTOMER_INDEX['data'])}")
+            import psycopg2
+            conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM claims;")
+                count = cur.fetchone()[0]
+                cur.execute("SELECT MAX(synced_at) FROM claims;")
+                last_sync = cur.fetchone()[0]
+            conn.close()
+            info["row_count"] = count
+            info["last_synced_at"] = str(last_sync) if last_sync else "Never"
         except Exception as e:
-            print(f"[CACHE-WARM] Error: {e}")
+            info["row_count"] = "unknown"
+            info["last_synced_at"] = "unknown"
+            info["note"] = str(e)
+    return jsonify(info)
 
-# LAZY startup: Do NOT block on Excel load. The first /lookup-customer call will
-# trigger an async background parse. This prevents Render OOM 502 kills on boot.
-def _start_background_if_stale():
-    """Trigger a background refresh ONLY if pickle is missing or stale."""
+@app.route('/api/pg-claims', methods=['GET'])
+@admin_required
+def api_pg_claims():
+    """
+    Return all claims stored in PostgreSQL as JSON.
+    Useful for debugging. Supports ?limit=N query param.
+    GET /api/pg-claims?limit=50
+    """
+    if not PG_AVAILABLE:
+        return jsonify({"success": False, "error": "DATABASE_URL is not configured."}), 503
+
     try:
-        if os.path.exists(EXCEL_FILE) and os.path.exists(CACHE_FILE):
-            excel_mtime = os.path.getmtime(EXCEL_FILE)
-            cache_mtime = os.path.getmtime(CACHE_FILE)
-            if excel_mtime <= cache_mtime:
-                # Pickle is fresh - load it into memory quickly
-                import pickle
-                with open(CACHE_FILE, 'rb') as f:
-                    index = pickle.load(f)
-                if isinstance(index, dict) and index:
-                    with CACHE_LOCK:
-                        CUSTOMER_INDEX['data'] = index
-                        CUSTOMER_INDEX['last_mod'] = cache_mtime
-                    print(f"[STARTUP] Loaded {len(index)} records from pickle cache instantly.")
-                    return
-        # Pickle is missing or stale - trigger background thread
-        print("[STARTUP] No fresh pickle - will load on first lookup request.")
-    except Exception as e:
-        print(f"[STARTUP] Cache check error: {e}")
+        limit = int(request.args.get("limit", 100))
+        limit = max(1, min(limit, 1000))  # clamp 1–1000
+    except (ValueError, TypeError):
+        limit = 100
 
-if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
-    threading.Thread(target=_start_background_if_stale, daemon=True).start()
+    try:
+        import psycopg2
+        import psycopg2.extras
+        conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM claims ORDER BY synced_at DESC LIMIT %s;", (limit,))
+            rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return jsonify({"success": True, "count": len(rows), "claims": rows})
+    except Exception as e:
+        logging.error(f"[PG_CLAIMS_ROUTE] Error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+
+# ── API: bulk import Excel → Dynamic Table ───────────────────────────
+@app.route('/api/db/bulk-import/<table_name>', methods=['POST'])
+@login_required
+def api_db_bulk_import(table_name):
+    if not session.get('db_mgr_auth'):
+        return jsonify({'error': 'Unauthorized'}), 403
+    if table_name not in _DB_ALLOWED_TABLES:
+        return jsonify({'error': 'Invalid table'}), 400
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({'error': 'No file selected'}), 400
+    import re, pandas as pd, psycopg2, psycopg2.extras, io
+
+    def pg_col(name):
+        s = re.sub(r'[^a-z0-9]+', '_', str(name).strip().lower()).strip('_')
+        return s or 'col'
+
+    try:
+        df = pd.read_excel(io.BytesIO(f.read()), dtype=str)
+        df.columns = [str(c).strip() for c in df.columns]
+        col_map = {}
+        for c in df.columns:
+            pg = pg_col(c)
+            col_map[c] = pg if pg not in col_map.values() else pg + '_2'
+        pg_cols = list(col_map.values())
+
+        conn = psycopg2.connect(os.environ['DATABASE_URL'])
+        cur  = conn.cursor()
+
+        # Ensure columns exist
+        cur.execute(f"""SELECT column_name FROM information_schema.columns
+                       WHERE table_name='{table_name}' AND table_schema='public'""")
+        existing_cols = {r[0] for r in cur.fetchall()}
+        for pg in pg_cols:
+            if pg not in existing_cols and pg not in ('id','imported_at'):
+                cur.execute(f'ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS "{pg}" TEXT')
+
+        # Insert rows
+        col_ids  = ', '.join(f'"{c}"' for c in pg_cols)
+        placeholders = ', '.join(['%s'] * len(pg_cols))
+        sql = f'INSERT INTO {table_name} ({col_ids}) VALUES ({placeholders})'
+        rows = []
+        for _, row in df.iterrows():
+            vals = []
+            
+            # Find exact keys from df
+            remarks_key = next((k for k in col_map.keys() if str(k).strip().lower() == "remarks"), None)
+            onsitego_key = next((k for k in col_map.keys() if "onsitego" in str(k).lower() and "status" in str(k).lower()), None)
+            notes_key = next((k for k in col_map.keys() if "follow up" in str(k).lower() and "notes" in str(k).lower()), None)
+            
+            remarks_val = str(row.get(remarks_key, '') if remarks_key else '').strip()
+            onsitego_val = str(row.get(onsitego_key, '') if onsitego_key else '').strip()
+            notes_val = str(row.get(notes_key, '') if notes_key else '').strip()
+            
+            if remarks_val.lower() in ('nan', 'none', 'nat'): remarks_val = ""
+            if onsitego_val.lower() in ('nan', 'none', 'nat'): onsitego_val = ""
+            if notes_val.lower() in ('nan', 'none', 'nat'): notes_val = ""
+            
+            import datetime
+            ts = datetime.datetime.now().strftime('%d/%m/%Y, %I:%M:%S %p').lower()
+            
+            if remarks_val and remarks_val.lower() not in notes_val.lower():
+                notes_val += f"\n[{ts}] [REMARK]: {remarks_val}"
+            if onsitego_val and onsitego_val.lower() not in notes_val.lower():
+                notes_val += f"\n[{ts}] [ONSITEGO STATUS]: {onsitego_val}"
+            
+            notes_val = notes_val.strip()
+            
+            for orig in col_map.keys():
+                if orig == notes_key:
+                    v = notes_val
+                else:
+                    v = str(row.get(orig, '') or '').strip()
+                vals.append(None if str(v).lower() in ('nan','none','nat','') else v)
+            rows.append(tuple(vals))
+
+        psycopg2.extras.execute_batch(cur, sql, rows, page_size=500)
+        conn.commit()
+        inserted = len(rows)
+
+        cur.execute(f'SELECT COUNT(*) FROM {table_name}')
+        total = cur.fetchone()[0]
+        conn.close()
+
+        return jsonify({'success': True, 'inserted': inserted, 'total': total, 'filename': f.filename})
+    except Exception as e:
+        logging.error(f'[BULK_IMPORT] {e}')
+        return jsonify({'error': str(e)}), 500
+
+# ─────────────────────────────────────────────────────────────────
+# DATABASE MANAGER  — password-protected CRUD for all PG tables
+# ─────────────────────────────────────────────────────────────────
+_DB_ALLOWED_TABLES = {'claims', 'osid_data', 'myg_all_store', 'future_store_list', 'rbm_bdm_branch'}
+_DB_MGR_PASSWORD   = os.environ.get('DB_MANAGER_PASSWORD', 'DBAdmin@2026')
+
+def _dbmgr_conn():
+    import psycopg2, psycopg2.extras
+    return psycopg2.connect(os.environ['DATABASE_URL'])
+
+@app.route('/db-manager')
+@login_required
+def db_manager():
+    if session.get('role') != 'admin':
+        return redirect(url_for('dashboard'))
+    if not session.get('db_mgr_auth'):
+        return redirect(url_for('db_manager_login'))
+    return render_template('db_manager.html')
+
+@app.route('/db-manager/login', methods=['GET', 'POST'])
+@login_required
+def db_manager_login():
+    if session.get('role') != 'admin':
+        return redirect(url_for('dashboard'))
+    error = None
+    if request.method == 'POST':
+        pwd = request.form.get('password', '')
+        if pwd == _DB_MGR_PASSWORD:
+            session['db_mgr_auth'] = True
+            return redirect(url_for('db_manager'))
+        error = 'Incorrect password.'
+    return render_template('db_manager_login.html', error=error)
+
+@app.route('/db-manager/logout')
+def db_manager_logout():
+    session.pop('db_mgr_auth', None)
+    return redirect(url_for('db_manager_login'))
+
+# ── API: list tables ──────────────────────────────────────────────
+@app.route('/api/db/tables')
+@login_required
+def api_db_tables():
+    if not session.get('db_mgr_auth'):
+        return jsonify({'error': 'Unauthorized'}), 403
+    import psycopg2
+    try:
+        conn = _dbmgr_conn()
+        cur = conn.cursor()
+        results = []
+        for tbl in sorted(_DB_ALLOWED_TABLES):
+            cur.execute(f"SELECT COUNT(*) FROM {tbl}")
+            count = cur.fetchone()[0]
+            cur.execute("""
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_name = %s AND table_schema = 'public'
+                ORDER BY ordinal_position
+            """, (tbl,))
+            cols = [{'name': r[0], 'type': r[1]} for r in cur.fetchall()]
+            results.append({'table': tbl, 'count': count, 'columns': cols})
+        conn.close()
+        return jsonify({'tables': results})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ── API: get rows (paginated) ─────────────────────────────────────
+@app.route('/api/db/table/<table_name>')
+@login_required
+def api_db_get_rows(table_name):
+    if not session.get('db_mgr_auth'):
+        return jsonify({'error': 'Unauthorized'}), 403
+    if table_name not in _DB_ALLOWED_TABLES:
+        return jsonify({'error': 'Table not allowed'}), 400
+    import psycopg2, psycopg2.extras
+    page     = int(request.args.get('page', 1))
+    per_page = int(request.args.get('per_page', 100))
+    search   = request.args.get('search', '').strip()
+    offset   = (page - 1) * per_page
+    try:
+        conn = _dbmgr_conn()
+        cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # columns
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name=%s AND table_schema='public'
+            ORDER BY ordinal_position
+        """, (table_name,))
+        cols = [r['column_name'] for r in cur.fetchall()]
+        # total count
+        if search:
+            where = " OR ".join([f"CAST(\"{c}\" AS TEXT) ILIKE %s" for c in cols])
+            params = [f'%{search}%'] * len(cols)
+            cur.execute(f"SELECT COUNT(*) FROM {table_name} WHERE {where}", params)
+            total = cur.fetchone()['count']
+            cur.execute(f"SELECT * FROM {table_name} WHERE {where} LIMIT %s OFFSET %s",
+                        params + [per_page, offset])
+        else:
+            cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+            total = cur.fetchone()['count']
+            cur.execute(f"SELECT * FROM {table_name} LIMIT %s OFFSET %s", (per_page, offset))
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return jsonify({'columns': cols, 'rows': rows, 'total': total, 'page': page, 'per_page': per_page})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ── API: update a row ─────────────────────────────────────────────
+@app.route('/api/db/table/<table_name>/row/<row_id>', methods=['PUT'])
+@login_required
+def api_db_update_row(table_name, row_id):
+    if not session.get('db_mgr_auth'):
+        return jsonify({'error': 'Unauthorized'}), 403
+    if table_name not in _DB_ALLOWED_TABLES:
+        return jsonify({'error': 'Table not allowed'}), 400
+    pk = 'claim_id' if table_name == 'claims' else 'id'
+    data = request.json or {}
+    data.pop(pk, None)   # don't update primary key
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+    set_clause = ", ".join([f'"{k}" = %s' for k in data.keys()])
+    vals = list(data.values()) + [row_id]
+    try:
+        conn = _dbmgr_conn()
+        cur = conn.cursor()
+        cur.execute(f'UPDATE {table_name} SET {set_clause} WHERE "{pk}" = %s', vals)
+        conn.commit(); conn.close()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ── API: delete a row ─────────────────────────────────────────────
+@app.route('/api/db/table/<table_name>/row/<row_id>', methods=['DELETE'])
+@login_required
+def api_db_delete_row(table_name, row_id):
+    if not session.get('db_mgr_auth'):
+        return jsonify({'error': 'Unauthorized'}), 403
+    if table_name not in _DB_ALLOWED_TABLES:
+        return jsonify({'error': 'Table not allowed'}), 400
+    pk = 'claim_id' if table_name == 'claims' else 'id'
+    try:
+        conn = _dbmgr_conn()
+        cur = conn.cursor()
+        cur.execute(f'DELETE FROM {table_name} WHERE "{pk}" = %s', (row_id,))
+        conn.commit(); conn.close()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ── API: add a row ────────────────────────────────────────────────
+@app.route('/api/db/table/<table_name>/row', methods=['POST'])
+@login_required
+def api_db_add_row(table_name):
+    if not session.get('db_mgr_auth'):
+        return jsonify({'error': 'Unauthorized'}), 403
+    if table_name not in _DB_ALLOWED_TABLES:
+        return jsonify({'error': 'Table not allowed'}), 400
+    data = request.json or {}
+    data.pop('id', None); data.pop('imported_at', None)
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+    cols_sql = ", ".join([f'"{k}"' for k in data.keys()])
+    vals_sql = ", ".join(["%s"] * len(data))
+    try:
+        conn = _dbmgr_conn()
+        cur = conn.cursor()
+        cur.execute(f'INSERT INTO {table_name} ({cols_sql}) VALUES ({vals_sql})', list(data.values()))
+        conn.commit(); conn.close()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── API: delete all rows ──────────────────────────────────────────
+@app.route('/api/db/table/<table_name>/all', methods=['DELETE'])
+@login_required
+def api_db_delete_all(table_name):
+    if not session.get('db_mgr_auth'): return jsonify({'error': 'Unauthorized'}), 403
+    if table_name not in _DB_ALLOWED_TABLES: return jsonify({'error': 'Table not allowed'}), 400
+    
+    data = request.json or {}
+    if data.get('password') != _DB_MGR_PASSWORD:
+        return jsonify({'error': 'Invalid DB Manager password'}), 401
+
+    try:
+        conn = _dbmgr_conn()
+        cur = conn.cursor()
+        cur.execute(f'TRUNCATE TABLE {table_name} RESTART IDENTITY CASCADE')
+        conn.commit(); conn.close()
+        logging.warning(f"[DBM] All data truncated from {table_name} by user: {session.get('user')}")
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+# ── BACKGROUND SHEET POLLER ───────────────────────────────────────
+def start_sheet_poller():
+    def poller():
+        import time
+        import requests
+        import threading
+        
+        while True:
+            time.sleep(15)  # Poll every 15 seconds
+            try:
+                web_app_url = os.environ.get("WEB_APP_URL")
+                if not web_app_url or not PG_AVAILABLE:
+                    continue
+                
+                resp = requests.get(web_app_url, timeout=30)
+                if resp.status_code != 200:
+                    continue
+                sheet_data = resp.json()
+                
+                # Fetch current db claims
+                from services.pg_sync import fetch_claims_from_postgres, upsert_claim_to_postgres
+                db_data = fetch_claims_from_postgres()
+                db_dict = {str(c.get("Claim ID", "")): c for c in db_data}
+                
+                updates_made = False
+                for row in sheet_data:
+                    cid = str(row.get("Claim ID") or row.get("claim_id") or "").strip()
+                    # Fix space vs hyphen mismatch if user manually edited Claim ID
+                    cid = cid.replace(" ", "-") 
+                    if not cid or not cid.startswith("CLM"):
+                        continue
+                        
+                    db_row = db_dict.get(cid, {})
+                    
+                    # Extract sheet Remarks and Onsitego
+                    s_remarks = ""
+                    s_onsitego = ""
+                    for k, v in row.items():
+                        if str(k).strip().lower() == "remarks":
+                            s_remarks = str(v).strip()
+                        elif "onsitego" in str(k).lower() and "status" in str(k).lower():
+                            s_onsitego = str(v).strip()
+                            
+                    # Extract DB Remarks and Onsitego
+                    db_remarks = ""
+                    db_onsitego = ""
+                    for k, v in db_row.items():
+                        if str(k).strip().lower() == "remarks":
+                            db_remarks = str(v).strip()
+                        elif "onsitego" in str(k).lower() and "status" in str(k).lower():
+                            db_onsitego = str(v).strip()
+                            
+                    if s_remarks.lower() in ('nan', 'none', 'nat'): s_remarks = ""
+                    if s_onsitego.lower() in ('nan', 'none', 'nat'): s_onsitego = ""
+                    if db_remarks.lower() in ('nan', 'none', 'nat'): db_remarks = ""
+                    if db_onsitego.lower() in ('nan', 'none', 'nat'): db_onsitego = ""
+
+                    # If changed in sheet, push to DB!
+                    if (s_remarks and s_remarks.lower() != db_remarks.lower()) or \
+                       (s_onsitego and s_onsitego.lower() != db_onsitego.lower()):
+                        print(f"[POLLER] Detected change in sheet for Claim {cid} - Syncing to DB")
+                        upsert_claim_to_postgres(row)
+                        updates_made = True
+                        
+                if updates_made:
+                    global CLAIMS_CACHE
+                    CLAIMS_CACHE['last_updated'] = 0
+            except Exception as e:
+                pass
+                
+    import threading
+    t = threading.Thread(target=poller, daemon=True)
+    t.start()
+
+start_sheet_poller()
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    port = int(os.environ.get("PORT", 3000))
+    app.run(
+        host='0.0.0.0',
+        port=port,
+        debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'  # Never True in production
+    )
 

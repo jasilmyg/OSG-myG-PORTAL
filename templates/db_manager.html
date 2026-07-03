@@ -1,0 +1,630 @@
+{% extends "layout.html" %}
+{% block content %}
+<style>
+:root { --db-primary:#6366f1; --db-danger:#ef4444; --db-success:#10b981; }
+.dbm-wrap { display:flex; gap:1.2rem; height:calc(100vh - 80px); overflow:hidden; }
+
+/* LEFT PANEL */
+.dbm-sidebar {
+    width:230px; min-width:200px;
+    background:rgba(255,255,255,.95);
+    border-radius:16px; padding:1.2rem;
+    box-shadow:0 4px 24px rgba(99,102,241,.1);
+    border:1px solid rgba(99,102,241,.1);
+    display:flex; flex-direction:column; gap:.5rem;
+    overflow-y:auto;
+}
+.dbm-sidebar-title {
+    font-size:.75rem; font-weight:700; color:#9ca3af;
+    text-transform:uppercase; letter-spacing:.06em;
+    padding:.2rem .4rem .8rem;
+}
+.dbm-table-btn {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:.7rem .9rem; border-radius:10px; cursor:pointer;
+    font-size:.88rem; font-weight:500; color:#374151;
+    transition:background .15s, color .15s; border:none;
+    background:transparent; width:100%; text-align:left;
+}
+.dbm-table-btn:hover  { background:#f0f0ff; color:var(--db-primary); }
+.dbm-table-btn.active { background:linear-gradient(135deg,#6366f1,#8b5cf6); color:#fff; }
+.dbm-table-btn .badge {
+    font-size:.72rem; font-weight:700;
+    background:rgba(255,255,255,.25); border-radius:20px; padding:2px 8px;
+}
+.dbm-table-btn.active .badge { background:rgba(255,255,255,.3); }
+.dbm-logout {
+    margin-top:auto; padding:.65rem .9rem; border-radius:10px;
+    color:#ef4444; font-size:.85rem; font-weight:500; cursor:pointer;
+    display:flex; align-items:center; gap:.5rem; border:none;
+    background:rgba(239,68,68,.06); width:100%; transition:background .15s;
+}
+.dbm-logout:hover { background:rgba(239,68,68,.12); }
+
+/* RIGHT PANEL */
+.dbm-main {
+    flex:1; display:flex; flex-direction:column; gap:1rem;
+    overflow:hidden;
+}
+.dbm-toolbar {
+    background:rgba(255,255,255,.95);
+    border-radius:14px; padding:.9rem 1.2rem;
+    display:flex; align-items:center; gap:.8rem; flex-wrap:wrap;
+    box-shadow:0 4px 18px rgba(99,102,241,.08);
+    border:1px solid rgba(99,102,241,.08);
+}
+.dbm-title { font-size:1.1rem; font-weight:700; color:#1e1b4b; flex:1; }
+.dbm-search {
+    padding:.55rem 1rem; border:1.5px solid #e5e7eb; border-radius:8px;
+    font-size:.87rem; width:220px; outline:none; transition:border-color .2s;
+}
+.dbm-search:focus { border-color:var(--db-primary); }
+.dbm-btn {
+    padding:.55rem 1.1rem; border-radius:8px; font-size:.85rem;
+    font-weight:600; cursor:pointer; border:none; display:flex;
+    align-items:center; gap:.4rem; transition:transform .12s, box-shadow .12s;
+}
+.dbm-btn:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,.12); }
+.dbm-btn-primary { background:linear-gradient(135deg,#6366f1,#8b5cf6); color:#fff; }
+.dbm-btn-danger  { background:linear-gradient(135deg,#ef4444,#f97316); color:#fff; }
+.dbm-btn-success { background:linear-gradient(135deg,#10b981,#059669); color:#fff; }
+.dbm-btn-gray    { background:#f3f4f6; color:#374151; }
+
+.dbm-table-wrap {
+    flex:1; background:rgba(255,255,255,.95);
+    border-radius:14px; overflow:auto;
+    box-shadow:0 4px 18px rgba(99,102,241,.08);
+    border:1px solid rgba(99,102,241,.08);
+}
+table.dbm-tbl { width:100%; border-collapse:collapse; font-size:.83rem; }
+table.dbm-tbl thead th {
+    position:sticky; top:0; background:#f8f7ff;
+    padding:.6rem .8rem; text-align:left; font-weight:700;
+    color:#4338ca; font-size:.78rem; text-transform:uppercase;
+    letter-spacing:.04em; border-bottom:2px solid #e0e7ff;
+    white-space:nowrap;
+}
+table.dbm-tbl tbody tr { border-bottom:1px solid #f1f5f9; transition:background .12s; }
+table.dbm-tbl tbody tr:hover { background:#f8f7ff; }
+table.dbm-tbl td {
+    padding:.55rem .8rem; max-width:220px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#374151;
+}
+.dbm-row-actions { display:flex; gap:.4rem; }
+.dbm-act-btn {
+    width:28px; height:28px; border-radius:6px; border:none; cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center;
+    font-size:.95rem; transition:transform .1s;
+}
+.dbm-act-btn:hover { transform:scale(1.12); }
+.dbm-act-edit   { background:#ede9fe; color:#7c3aed; }
+.dbm-act-delete { background:#fee2e2; color:#dc2626; }
+
+.dbm-pager {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:.6rem 1rem; background:rgba(255,255,255,.9);
+    border-top:1px solid #e0e7ff; font-size:.83rem; color:#6b7280;
+    flex-shrink:0;
+}
+.dbm-pager-btns { display:flex; gap:.4rem; }
+.dbm-page-btn {
+    padding:.3rem .75rem; border-radius:6px; border:1.5px solid #e0e7ff;
+    background:#fff; cursor:pointer; font-size:.82rem; font-weight:500;
+    color:#374151; transition:background .12s;
+}
+.dbm-page-btn:hover  { background:#ede9fe; color:#6366f1; }
+.dbm-page-btn.active { background:#6366f1; color:#fff; border-color:#6366f1; }
+
+/* MODAL */
+.dbm-modal-overlay {
+    position:fixed; inset:0; background:rgba(0,0,0,.45);
+    display:flex; align-items:center; justify-content:center; z-index:9999;
+}
+.dbm-modal-overlay.hidden { display:none; }
+.dbm-modal {
+    background:#fff; border-radius:18px; padding:1.8rem;
+    width:100%; max-width:600px; max-height:85vh; overflow-y:auto;
+    box-shadow:0 24px 80px rgba(0,0,0,.2);
+}
+.dbm-modal-header {
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:1.2rem;
+}
+.dbm-modal-header h3 { font-size:1.1rem; font-weight:700; color:#1e1b4b; }
+.dbm-modal-close {
+    width:34px; height:34px; border-radius:8px; border:none;
+    background:#f3f4f6; cursor:pointer; font-size:1.1rem; color:#6b7280;
+}
+.dbm-fields-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+.dbm-field label { display:block; font-size:.77rem; font-weight:600; color:#4338ca; margin-bottom:.3rem; }
+.dbm-field input, .dbm-field textarea {
+    width:100%; padding:.55rem .8rem; border:1.5px solid #e5e7eb;
+    border-radius:8px; font-size:.85rem; outline:none; transition:border-color .2s;
+    box-sizing:border-box; resize:vertical;
+}
+.dbm-field input:focus, .dbm-field textarea:focus { border-color:#6366f1; }
+.dbm-modal-footer {
+    display:flex; justify-content:flex-end; gap:.6rem; margin-top:1.2rem;
+}
+.dbm-empty { padding:3rem; text-align:center; color:#9ca3af; font-size:.95rem; }
+.dbm-loading { padding:3rem; text-align:center; color:#6366f1; }
+</style>
+
+<div class="dbm-wrap">
+    <!-- LEFT: Table list -->
+    <div class="dbm-sidebar" id="dbmSidebar">
+        <div class="dbm-sidebar-title"><i class="ri-database-2-line"></i> Tables</div>
+        <div id="tableList"><div style="color:#9ca3af;font-size:.85rem;padding:.5rem">Loading...</div></div>
+        <button class="dbm-logout" onclick="location.href='/db-manager/logout'">
+            <i class="ri-logout-box-r-line"></i> Lock Manager
+        </button>
+    </div>
+
+    <!-- RIGHT: Data area -->
+    <div class="dbm-main">
+        <div class="dbm-toolbar">
+            <span class="dbm-title" id="dbmTableTitle"><i class="ri-table-line"></i> Select a table</span>
+            <input class="dbm-search" id="dbmSearch" placeholder="Search all columns..." oninput="debounceSearch()">
+            <div style="display:flex;gap:.5rem;">
+                <button class="dbm-btn" style="background:#ef4444;color:white;" onclick="deleteAllData()">
+                    <i class="ri-delete-bin-2-line"></i> Delete All
+                </button>
+                <button class="dbm-btn dbm-btn-success" onclick="openAddModal()">
+                    <i class="ri-add-line"></i> Add Row
+                </button>
+            </div>
+        </div>
+
+        <div class="dbm-table-wrap">
+            <div id="dbmEmpty" class="dbm-empty">
+                <i class="ri-database-line" style="font-size:2.5rem;display:block;margin-bottom:.8rem;"></i>
+                Select a table from the left panel to view and manage its data.
+            </div>
+            <div id="dbmLoading" class="dbm-loading" style="display:none">
+                <i class="ri-loader-4-line" style="font-size:2rem;display:block;margin-bottom:.5rem;animation:spin 1s linear infinite;"></i>
+                Loading data...
+            </div>
+            <table class="dbm-tbl" id="dbmTable" style="display:none">
+                <thead id="dbmThead"></thead>
+                <tbody id="dbmTbody"></tbody>
+            </table>
+        </div>
+
+        <div class="dbm-pager" id="dbmPager" style="display:none">
+            <span id="dbmPagerInfo"></span>
+            <div class="dbm-pager-btns" id="dbmPagerBtns"></div>
+        </div>
+
+        <!-- Bulk Import Card -->
+        <div id="bulkImportCard" style="display:none;
+            background:rgba(255,255,255,.95); border-radius:14px;
+            padding:1.2rem 1.5rem; border:1.5px dashed #a5b4fc;
+            box-shadow:0 4px 18px rgba(99,102,241,.07); flex-shrink:0;">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.8rem;">
+                <div>
+                    <div style="font-size:.95rem;font-weight:700;color:#3730a3;display:flex;align-items:center;gap:.5rem;">
+                        <i class="ri-file-excel-2-line" style="font-size:1.2rem;color:#10b981;"></i>
+                        Bulk Import from Excel → <span id="bulkImportTableName" style="color:#6366f1;"></span>
+                    </div>
+                    <div style="font-size:.8rem;color:#6b7280;margin-top:.25rem;">
+                        Upload an .xlsx file to <strong>append</strong> new rows to the existing table. Existing data is preserved.
+                    </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+                    <label style="display:flex;align-items:center;gap:.5rem;
+                        padding:.55rem 1rem;background:#f0f0ff;border:1.5px solid #c7d2fe;
+                        border-radius:8px;cursor:pointer;font-size:.85rem;font-weight:600;color:#4338ca;
+                        transition:background .15s;" onmouseover="this.style.background='#e0e7ff'" onmouseout="this.style.background='#f0f0ff'">
+                        <i class="ri-upload-2-line"></i> Choose Excel File
+                        <input type="file" id="bulkExcelFile" accept=".xlsx,.xls" style="display:none" onchange="bulkFileSelected(this)">
+                    </label>
+                    <span id="bulkFileName" style="font-size:.82rem;color:#6b7280;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                    <button class="dbm-btn dbm-btn-success" type="button" id="bulkImportBtn"
+                        onclick="startBulkImport()" style="display:none;">
+                        <i class="ri-database-2-line"></i> Import Now
+                    </button>
+                </div>
+            </div>
+            <!-- Progress -->
+            <div id="bulkProgress" style="display:none;margin-top:1rem;">
+                <div style="height:6px;background:#e0e7ff;border-radius:4px;overflow:hidden;">
+                    <div id="bulkProgressBar" style="height:100%;background:linear-gradient(90deg,#6366f1,#8b5cf6);
+                        width:0%;transition:width .3s;border-radius:4px;"></div>
+                </div>
+                <div id="bulkProgressText" style="font-size:.82rem;color:#6366f1;margin-top:.4rem;font-weight:500;"></div>
+            </div>
+            <!-- Result -->
+            <div id="bulkResult" style="display:none;margin-top:.8rem;padding:.65rem 1rem;
+                border-radius:8px;font-size:.87rem;font-weight:600;"></div>
+        </div>
+    </div>
+
+
+<!-- Edit Modal -->
+<div class="dbm-modal-overlay" id="editModal" style="display:none" onclick="dbmBackdropClose(event,'editModal')">
+    <div class="dbm-modal">
+        <div class="dbm-modal-header">
+            <h3 id="editModalTitle">Edit Row</h3>
+            <button class="dbm-modal-close" type="button" onclick="dbmClose('editModal')"><i class="ri-close-line"></i></button>
+        </div>
+        <div class="dbm-fields-grid" id="editFields"></div>
+        <div class="dbm-modal-footer">
+            <button class="dbm-btn dbm-btn-gray" type="button" onclick="dbmClose('editModal')">Cancel</button>
+            <button class="dbm-btn dbm-btn-primary" type="button" onclick="saveEdit()"><i class="ri-save-line"></i> Save Changes</button>
+        </div>
+    </div>
+</div>
+
+<!-- Add Modal -->
+<div class="dbm-modal-overlay" id="addModal" style="display:none" onclick="dbmBackdropClose(event,'addModal')">
+    <div class="dbm-modal">
+        <div class="dbm-modal-header">
+            <h3>Add New Row</h3>
+            <button class="dbm-modal-close" type="button" onclick="dbmClose('addModal')"><i class="ri-close-line"></i></button>
+        </div>
+        <div class="dbm-fields-grid" id="addFields"></div>
+        <div class="dbm-modal-footer">
+            <button class="dbm-btn dbm-btn-gray" type="button" onclick="dbmClose('addModal')">Cancel</button>
+            <button class="dbm-btn dbm-btn-success" type="button" onclick="saveAdd()"><i class="ri-add-line"></i> Add Row</button>
+        </div>
+    </div>
+</div>
+
+<!-- Delete All Modal -->
+<div class="dbm-modal-overlay" id="deleteAllModal" style="display:none" onclick="dbmBackdropClose(event,'deleteAllModal')">
+    <div class="dbm-modal" style="max-width: 400px;">
+        <div class="dbm-modal-header">
+            <h3 style="color:#ef4444;"><i class="ri-alert-line"></i> Confirm Delete All</h3>
+            <button class="dbm-modal-close" type="button" onclick="dbmClose('deleteAllModal')"><i class="ri-close-line"></i></button>
+        </div>
+        <div style="padding: 1.5rem 0;">
+            <p style="margin-bottom: 1rem; color: #4b5563; font-size: 0.95rem;">
+                Are you sure you want to delete <strong>ALL</strong> data from <span id="delAllTableName" style="font-weight:bold;color:#111;"></span>?<br><br>
+                This action is irreversible. Please enter the DB Manager password to confirm.
+            </p>
+            <div class="dbm-field">
+                <label>DB Manager Password</label>
+                <input type="password" id="delAllPassword" placeholder="Enter password...">
+            </div>
+        </div>
+        <div class="dbm-modal-footer">
+            <button class="dbm-btn dbm-btn-gray" type="button" onclick="dbmClose('deleteAllModal')">Cancel</button>
+            <button class="dbm-btn" style="background:#ef4444;color:white;" type="button" onclick="executeDeleteAll()"><i class="ri-delete-bin-2-line"></i> Delete All Data</button>
+        </div>
+    </div>
+</div>
+
+<style>
+@keyframes spin { to { transform:rotate(360deg); } }
+</style>
+
+<script>
+let currentTable = null;
+let currentPage  = 1;
+let perPage      = 100;
+let totalRows    = 0;
+let allColumns   = [];
+let tablesMeta   = [];
+let editRowData  = null;
+let searchTimer  = null;
+
+// ── Init ──────────────────────────────────────────────────────────
+fetch('/api/db/tables').then(r=>r.json()).then(data=>{
+    tablesMeta = data.tables || [];
+    const list = document.getElementById('tableList');
+    list.innerHTML = '';
+    tablesMeta.forEach(t=>{
+        const btn = document.createElement('button');
+        btn.className = 'dbm-table-btn';
+        btn.dataset.table = t.table;
+        btn.innerHTML = `<span><i class="ri-table-2-line"></i> ${t.table}</span><span class="badge">${t.count.toLocaleString()}</span>`;
+        btn.onclick = ()=>selectTable(t.table, btn);
+        list.appendChild(btn);
+    });
+});
+
+function selectTable(name, btn) {
+    currentTable = name;
+    currentPage  = 1;
+    document.getElementById('dbmSearch').value = '';
+    document.querySelectorAll('.dbm-table-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('dbmTableTitle').innerHTML = `<i class="ri-table-2-line"></i> ${name}`;
+    
+    // show bulk import card for ALL tables
+    document.getElementById('bulkImportCard').style.display = 'block';
+    document.getElementById('bulkImportTableName').textContent = name;
+    
+    // reset bulk import state
+    document.getElementById('bulkExcelFile').value = '';
+    document.getElementById('bulkFileName').textContent = '';
+    document.getElementById('bulkImportBtn').style.display = 'none';
+    document.getElementById('bulkProgress').style.display = 'none';
+    document.getElementById('bulkResult').style.display = 'none';
+    loadRows();
+}
+
+function loadRows() {
+    if (!currentTable) return;
+    dbmShow('dbmLoading'); dbmHide('dbmEmpty'); dbmHide('dbmTable'); dbmHide('dbmPager');
+    const search = document.getElementById('dbmSearch').value;
+    fetch(`/api/db/table/${currentTable}?page=${currentPage}&per_page=${perPage}&search=${encodeURIComponent(search)}`)
+    .then(r=>r.json()).then(data=>{
+        if (data.error) { alert('Error: '+data.error); dbmHide('dbmLoading'); return; }
+        allColumns = data.columns;
+        totalRows  = data.total;
+        renderTable(data.columns, data.rows);
+        renderPager();
+        dbmHide('dbmLoading'); dbmShow('dbmTable'); dbmShow('dbmPager');
+    });
+}
+
+// ── Date formatter ────────────────────────────────────────────────
+function formatCell(col, raw) {
+    const s = String(raw ?? '');
+    if (!s || s === 'null' || s === 'None') return '';
+    // Match: 2026-03-01 00:00:00  OR  2026-03-01T00:00:00  OR  2026-03-01
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})([T ].*)?$/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+    return s;
+}
+
+function renderTable(cols, rows) {
+    const pk = currentTable === 'claims' ? 'claim_id' : 'id';
+    // header
+    document.getElementById('dbmThead').innerHTML =
+        '<tr>' + cols.map(c=>`<th>${c}</th>`).join('') + '<th>Actions</th></tr>';
+    // body
+    if (!rows.length) {
+        document.getElementById('dbmTbody').innerHTML =
+            `<tr><td colspan="${cols.length+1}" class="dbm-empty">No records found.</td></tr>`;
+        return;
+    }
+    document.getElementById('dbmTbody').innerHTML = rows.map(row=>{
+        const pkVal = row[pk] || row['id'];
+        const cells = cols.map(c=>{
+            const raw     = String(row[c] ?? '');
+            const display = formatCell(c, raw);
+            return `<td title="${esc(raw)}">${esc(trunc(display, 60))}</td>`;
+        }).join('');
+        return `<tr>
+            ${cells}
+            <td>
+                <div class="dbm-row-actions">
+                    <button class="dbm-act-btn dbm-act-edit" onclick='openEdit(${JSON.stringify(JSON.stringify(row))})' title="Edit"><i class="ri-edit-line"></i></button>
+                    <button class="dbm-act-btn dbm-act-delete" onclick="deleteRow('${pkVal}')" title="Delete"><i class="ri-delete-bin-line"></i></button>
+                </div>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+
+function renderPager() {
+    const pages = Math.ceil(totalRows / perPage);
+    const info  = `Showing ${((currentPage-1)*perPage)+1}–${Math.min(currentPage*perPage,totalRows)} of ${totalRows.toLocaleString()} rows`;
+    document.getElementById('dbmPagerInfo').textContent = info;
+
+    let btns = '';
+    // First
+    if (currentPage > 1)
+        btns += `<button class="dbm-page-btn" onclick="goPage(1)" title="First page">« First</button>`;
+    // Prev
+    if (currentPage > 1)
+        btns += `<button class="dbm-page-btn" onclick="goPage(${currentPage-1})">‹ Prev</button>`;
+    // Numbered pages (window of 5)
+    for (let p = Math.max(1,currentPage-2); p <= Math.min(pages,currentPage+2); p++) {
+        btns += `<button class="dbm-page-btn ${p===currentPage?'active':''}" onclick="goPage(${p})">${p}</button>`;
+    }
+    // Next
+    if (currentPage < pages)
+        btns += `<button class="dbm-page-btn" onclick="goPage(${currentPage+1})">Next ›</button>`;
+    // Last
+    if (currentPage < pages)
+        btns += `<button class="dbm-page-btn" onclick="goPage(${pages})" title="Last page">Last »</button>`;
+
+    document.getElementById('dbmPagerBtns').innerHTML = btns;
+}
+
+
+function goPage(p) { currentPage = p; loadRows(); }
+
+// ── Bulk Excel Import ──────────────────────────────────────────────
+function bulkFileSelected(input) {
+    const file = input.files[0];
+    if (!file) return;
+    document.getElementById('bulkFileName').textContent = file.name;
+    document.getElementById('bulkImportBtn').style.display = 'inline-flex';
+    document.getElementById('bulkResult').style.display = 'none';
+}
+
+function startBulkImport() {
+    const fileInput = document.getElementById('bulkExcelFile');
+    const file = fileInput.files[0];
+    if (!file) { alert('Please choose an Excel file first.'); return; }
+
+    const btn = document.getElementById('bulkImportBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="ri-loader-4-line"></i> Uploading...';
+
+    // Show progress
+    const prog = document.getElementById('bulkProgress');
+    const bar  = document.getElementById('bulkProgressBar');
+    const txt  = document.getElementById('bulkProgressText');
+    prog.style.display = 'block';
+    bar.style.width = '15%';
+    txt.textContent = 'Uploading file...';
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    // Animate progress while waiting
+    let pct = 15;
+    const ticker = setInterval(() => {
+        if (pct < 85) { pct += 3; bar.style.width = pct + '%'; }
+    }, 400);
+
+    fetch(`/api/db/bulk-import/${currentTable}`, { method: 'POST', body: formData })
+    .then(r => r.json())
+    .then(data => {
+        clearInterval(ticker);
+        bar.style.width = '100%';
+        btn.disabled = false;
+        btn.innerHTML = '<i class="ri-database-2-line"></i> Import Now';
+
+        const res = document.getElementById('bulkResult');
+        res.style.display = 'block';
+        if (data.success) {
+            txt.textContent = 'Done!';
+            res.style.background = '#d1fae5';
+            res.style.color = '#065f46';
+            res.style.border = '1.5px solid #6ee7b7';
+            res.innerHTML = `<i class="ri-checkbox-circle-line"></i> ✅ Successfully imported <strong>${data.inserted.toLocaleString()}</strong> rows from <em>${data.filename}</em>. Table now has <strong>${data.total.toLocaleString()}</strong> total rows.`;
+            // Reset file input
+            fileInput.value = '';
+            document.getElementById('bulkFileName').textContent = '';
+            document.getElementById('bulkImportBtn').style.display = 'none';
+            // Reload table data
+            setTimeout(() => loadRows(), 800);
+        } else {
+            txt.textContent = 'Import failed.';
+            res.style.background = '#fee2e2';
+            res.style.color = '#991b1b';
+            res.style.border = '1.5px solid #fca5a5';
+            res.innerHTML = `<i class="ri-error-warning-line"></i> ❌ Error: ${data.error}`;
+        }
+    })
+    .catch(err => {
+        clearInterval(ticker);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="ri-database-2-line"></i> Import Now';
+        alert('Upload failed: ' + err.message);
+    });
+}
+
+function deleteAllData() {
+    if (!currentTable) { alert("Please select a table first."); return; }
+    document.getElementById('delAllTableName').textContent = currentTable;
+    document.getElementById('delAllPassword').value = '';
+    dbmOpen('deleteAllModal');
+}
+
+function executeDeleteAll() {
+    const pwd = document.getElementById('delAllPassword').value;
+    if (!pwd) { alert("Password is required."); return; }
+
+    fetch(`/api/db/table/${currentTable}/all`, { 
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pwd })
+    })
+    .then(r => r.json())
+    .then(d => {
+        if (d.success) {
+            dbmClose('deleteAllModal');
+            toast(`All data deleted from ${currentTable} ✓`, 'success');
+            loadRows();
+        } else {
+            alert('Error: ' + d.error);
+        }
+    });
+}
+
+
+function openEdit(jsonStr) {
+    const row = JSON.parse(jsonStr);
+    editRowData = row;
+    const pk = currentTable === 'claims' ? 'claim_id' : 'id';
+    document.getElementById('editModalTitle').textContent = `Edit Row — ${pk}: ${row[pk]||row['id']}`;
+    const fields = document.getElementById('editFields');
+    fields.innerHTML = allColumns.filter(c=>c!==pk).map(c=>`
+        <div class="dbm-field">
+            <label>${c}</label>
+            <input id="ef_${c}" value="${esc(String(row[c]??''))}">
+        </div>`).join('');
+    dbmOpen('editModal');
+}
+
+function saveEdit() {
+    const pk = currentTable === 'claims' ? 'claim_id' : 'id';
+    const pkVal = editRowData[pk] || editRowData['id'];
+    const payload = {};
+    allColumns.filter(c=>c!==pk).forEach(c=>{
+        const el = document.getElementById('ef_'+c);
+        if (el) payload[c] = el.value;
+    });
+    fetch(`/api/db/table/${currentTable}/row/${pkVal}`, {
+        method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)
+    }).then(r=>r.json()).then(d=>{
+        if (d.success) { dbmClose('editModal'); toast('Row updated ✓','success'); loadRows(); }
+        else alert('Error: '+d.error);
+    });
+}
+
+// ── Add ───────────────────────────────────────────────────────────
+function openAddModal() {
+    if (!currentTable) { alert('Select a table first.'); return; }
+    const pk = currentTable === 'claims' ? 'claim_id' : 'id';
+    const fields = document.getElementById('addFields');
+    fields.innerHTML = allColumns.filter(c=>c!==pk && c!=='imported_at').map(c=>`
+        <div class="dbm-field">
+            <label>${c}</label>
+            <input id="af_${c}" value="">
+        </div>`).join('');
+    dbmOpen('addModal');
+}
+
+function saveAdd() {
+    const pk = currentTable === 'claims' ? 'claim_id' : 'id';
+    const payload = {};
+    allColumns.filter(c=>c!==pk && c!=='imported_at').forEach(c=>{
+        const el = document.getElementById('af_'+c);
+        if (el && el.value) payload[c] = el.value;
+    });
+    fetch(`/api/db/table/${currentTable}/row`, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)
+    }).then(r=>r.json()).then(d=>{
+        if (d.success) { dbmClose('addModal'); toast('Row added ✓','success'); loadRows(); }
+        else alert('Error: '+d.error);
+    });
+}
+
+// ── Delete ────────────────────────────────────────────────────────
+function deleteRow(pkVal) {
+    if (!confirm(`Delete row with ID "${pkVal}"? This cannot be undone.`)) return;
+    fetch(`/api/db/table/${currentTable}/row/${pkVal}`, {method:'DELETE'})
+    .then(r=>r.json()).then(d=>{
+        if (d.success) { toast('Row deleted','success'); loadRows(); }
+        else alert('Error: '+d.error);
+    });
+}
+
+// ── Search debounce ───────────────────────────────────────────────
+function debounceSearch() {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(()=>{ currentPage=1; loadRows(); }, 400);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
+const _dbmDisplay = { dbmTable:'table', dbmPager:'flex', dbmLoading:'block', dbmEmpty:'block' };
+function dbmShow(id) { const el=document.getElementById(id); if(el) el.style.display=(_dbmDisplay[id]||'block'); }
+function dbmHide(id) { const el=document.getElementById(id); if(el) el.style.display='none'; }
+function dbmOpen(id) { const el=document.getElementById(id); if(el){ el.style.display='flex'; document.body.style.overflow='hidden'; } }
+function dbmClose(id) { const el=document.getElementById(id); if(el){ el.style.display='none'; document.body.style.overflow=''; } }
+function dbmBackdropClose(e,id) { if(e.target===e.currentTarget) dbmClose(id); }
+document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ dbmClose('editModal'); dbmClose('addModal'); } });
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function trunc(s,n) { return s.length>n ? s.substring(0,n)+'…' : s; }
+
+function toast(msg, type='success') {
+    const t = document.createElement('div');
+    t.style.cssText = `position:fixed;bottom:24px;right:24px;z-index:99999;padding:.75rem 1.2rem;
+        border-radius:10px;font-size:.9rem;font-weight:600;color:#fff;
+        background:${type==='success'?'#10b981':'#ef4444'};
+        box-shadow:0 8px 24px rgba(0,0,0,.15);animation:slideIn .2s ease;`;
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(()=>t.remove(), 2800);
+}
+</script>
+{% endblock %}

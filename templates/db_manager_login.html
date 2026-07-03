@@ -1,0 +1,75 @@
+{% extends "layout.html" %}
+{% block content %}
+<style>
+.dblogin-wrap {
+    min-height: 80vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.dblogin-card {
+    background: rgba(255,255,255,0.95);
+    border-radius: 20px;
+    padding: 2.8rem 2.5rem;
+    width: 100%;
+    max-width: 420px;
+    box-shadow: 0 20px 60px rgba(99,102,241,0.15);
+    border: 1px solid rgba(99,102,241,0.12);
+    text-align: center;
+}
+.dblogin-icon {
+    width: 72px; height: 72px;
+    background: linear-gradient(135deg,#6366f1,#8b5cf6);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 1.4rem;
+    font-size: 2rem; color: #fff;
+}
+.dblogin-card h2 { font-size:1.5rem; font-weight:700; color:#1e1b4b; margin-bottom:.3rem; }
+.dblogin-card p  { color:#6b7280; font-size:.9rem; margin-bottom:1.8rem; }
+.dblogin-input {
+    width:100%; padding:.8rem 1rem; border:1.5px solid #e5e7eb;
+    border-radius:10px; font-size:1rem; outline:none;
+    transition: border-color .2s;
+    margin-bottom: 1rem;
+    box-sizing: border-box;
+}
+.dblogin-input:focus { border-color:#6366f1; box-shadow:0 0 0 3px rgba(99,102,241,.1); }
+.dblogin-btn {
+    width:100%; padding:.85rem; background:linear-gradient(135deg,#6366f1,#8b5cf6);
+    color:#fff; border:none; border-radius:10px; font-size:1rem;
+    font-weight:600; cursor:pointer; transition: transform .15s, box-shadow .15s;
+}
+.dblogin-btn:hover { transform:translateY(-1px); box-shadow:0 6px 18px rgba(99,102,241,.35); }
+.dblogin-error {
+    background:#fef2f2; color:#dc2626; border:1px solid #fecaca;
+    border-radius:8px; padding:.65rem 1rem; font-size:.9rem;
+    margin-bottom:1rem;
+}
+.dblogin-badge {
+    display:inline-flex; align-items:center; gap:.4rem;
+    background:rgba(99,102,241,.08); color:#6366f1;
+    border-radius:20px; padding:.3rem .9rem; font-size:.78rem;
+    font-weight:600; margin-bottom:1.5rem;
+}
+</style>
+
+<div class="dblogin-wrap">
+    <div class="dblogin-card">
+        <div class="dblogin-icon"><i class="ri-database-2-line"></i></div>
+        <span class="dblogin-badge"><i class="ri-shield-keyhole-line"></i> Restricted Access</span>
+        <h2>Database Manager</h2>
+        <p>Enter the Database Manager password to continue.</p>
+        {% if error %}
+        <div class="dblogin-error"><i class="ri-error-warning-line"></i> {{ error }}</div>
+        {% endif %}
+        <form method="POST">
+            <input class="dblogin-input" type="password" name="password"
+                   placeholder="Enter password..." autofocus autocomplete="current-password">
+            <button class="dblogin-btn" type="submit">
+                <i class="ri-lock-unlock-line"></i> Unlock
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}

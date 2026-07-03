@@ -182,7 +182,6 @@
             <tbody id="claimsTableBody">
                 {% for claim in claims %}
                 <tr data-completed="{{ 'true' if claim.complete else 'false' }}"
-                    data-status="{{ (claim.status or '') | lower | trim }}"
                     data-date="{{ claim.created_at.strftime('%Y-%m-%d') }}"
                     data-tat="{{ claim.tat if claim.tat is not none else '' }}">
                     <td>
@@ -534,7 +533,6 @@
                     <option value="Replacement approved">Replacement Approved</option>
                     <option value="Rejected">Rejected</option>
                     <option value="No Issue/Oncall Resolution">No Issue/Oncall Resolution</option>
-                    <option value="Cancelled">Cancelled</option>
                 </select>
             </div>
         </div>
@@ -773,6 +771,9 @@
         </div>
 
         <div style="margin-top: 1rem; display: flex; justify-content: flex-end; gap: 1rem;">
+            <button type="button" id="btn-notify-spare" class="btn-warning" onclick="notifySparePartsPending()" style="margin-right: auto; background-color: #f59e0b; color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-weight: 500; display: flex; align-items: center; gap: 0.5rem;">
+                <i class="ri-whatsapp-line"></i> Notify Spare Parts
+            </button>
             <button class="btn-secondary" onclick="closeModal()">Cancel</button>
             <button class="btn-primary" onclick="saveClaimChanges()">Save Changes</button>
         </div>

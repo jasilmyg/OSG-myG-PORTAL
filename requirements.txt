@@ -6,3 +6,7 @@ pytz
 flask-sqlalchemy
 xlsxwriter
 gunicorn
+flask-limiter
+python-dotenv
+flask-talisman
+psycopg2-binary

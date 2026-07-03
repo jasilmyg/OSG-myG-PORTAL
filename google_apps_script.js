@@ -1,274 +1,360 @@
 // --------------------------------------------------------------------------------
-// OSG myG PORTAL - BACKEND SCRIPT
+// OSG myG PORTAL - BACKEND SCRIPT (v6 - Robust row matching + SR No fix)
 // --------------------------------------------------------------------------------
-// INSTRUCTIONS:
-// 1. Paste this code into your Google Apps Script editor.
-// 2. Save the project.
-// 3. Click "Deploy" -> "New Deployment".
-// 4. Select type: "Web App".
-// 5. Description: "v2 Upsert logic".
-// 6. Execute as: "Me" (your email).
-// 7. Who has access: "Anyone" (IMPORTANT: Do not select "Anyone with Google Account" or "Only me").
-// 8. Click "Deploy" and copy the NEW Web App URL.
-// 9. Update the 'WEB_APP_URL' in your Python 'app.py' file if the URL changed.
-// --------------------------------------------------------------------------------
-
-const SHEET_NAME = "myG_OSG_Portal_Data";
+const SHEET_NAME = "myG-OSG CUSTOMER COMPLAINT DATA";
 const HEADER_ROW_INDEX = 1;
+const CLAIM_ID_COLUMN  = "Claim ID";
+const SR_NO_COLUMN     = "SR No";
 
+// Columns that should NEVER be auto-added to the Google Sheet.
+const SHEET_BLACKLIST = [
+  "Follow Up - Notes", "Assigned Staff", "Follow Up - Dates",
+  "Claim Settled Date", "Repair Feedback Completed (Yes/No)",
+  "Customer Confirmation", "Approval Mail Received From Onsitego (Yes/No)",
+  "Mail Sent To Store (Yes/No)", "Invoice Generated (Yes/No)",
+  "Invoice Sent To Onsitego (Yes/No)", "Settlement Mail to Accounts(Yes/No)",
+  "Settled With Accounts (Yes/No)", "Complete (Yes/No)",
+  "Last Updated Timestamp", "Last_Notified_Status",
+  "Replacement: Confirmation Pending", "Replacement: OSG Approval",
+  "Replacement: Mail to Store", "Replacement: Invoice Generated",
+  "Replacement: Invoice Sent to OSG", "Replacement: Settled with Accounts",
+  "Replacement: Settlement Mail to Accounts",
+  "Approval Mail Received Date", "Mail Sent To Store Date",
+  "Invoice Generated Date", "Invoice Sent To Onsitego Date",
+  "Settlement Mail to Accounts Date", "Feedback Rating",
+  "Settled Time (TAT)", "Settled With Accounts (Yes/No)",
+  "Complete", "claim_id", "sr_no", "_legacy_sr_lookup",
+  "Mobile Number", "Date"
+];
+
+// -----------------------------------------
 function _getSheet() {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    let sheet = ss.getSheetByName(SHEET_NAME);
-    if (!sheet) {
-        // Auto-create if missing
-        sheet = ss.insertSheet(SHEET_NAME);
-        // Add default headers if new
-        sheet.appendRow([
-            "Claim ID", "Date", "Customer Name", "Mobile Number", "Address",
-            "Product", "Invoice Number", "Serial Number", "Model", "OSID", "Issue", "Branch",
-            "Follow Up - Dates", "Follow Up - Notes", "Claim Settled Date", "Remarks",
-            "Status",
-            // Replacement Workflow Columns (O-T)
-            "Replacement: Confirmation Pending",
-            "Replacement: OSG Approval",
-            "Replacement: Mail to Store",
-            "Replacement: Invoice Generated",
-            "Replacement: Invoice Sent to OSG",
-            "Settlement Mail to Accounts(Yes/No)",
-            "Settlement Mail to Accounts Date",
-            "Replacement: Settled with Accounts",
-            // Complete Flag (Column U)
-            "Complete",
-            // Other fields
-            "Settled Time (TAT)", "Assigned Staff", "Last Updated Timestamp"
-        ]);
-    }
-    return sheet;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_NAME);
+    sheet.appendRow([SR_NO_COLUMN, "Submitted Date", "Customer Name", "Mobile",
+      "Branch", "Product", "Issue", "Status", CLAIM_ID_COLUMN]);
+  }
+  return sheet;
 }
 
 function _readHeaders(sheet) {
-    const lastCol = Math.max(sheet.getLastColumn(), 1);
-    const raw = sheet.getRange(HEADER_ROW_INDEX, 1, 1, lastCol).getValues()[0] || [];
-    return raw.map(h => (h === null || h === undefined) ? "" : String(h).trim());
+  const lastCol = Math.max(sheet.getLastColumn(), 1);
+  const raw = sheet.getRange(HEADER_ROW_INDEX, 1, 1, lastCol).getValues()[0] || [];
+  return raw.map(h => (h === null || h === undefined) ? "" : String(h).trim());
 }
 
-function _findHeaderIndex(headers, nameOptions) {
-    if (!Array.isArray(nameOptions)) nameOptions = [nameOptions];
-    const opts = nameOptions.map(x => String(x).trim().toLowerCase());
-    for (let i = 0; i < headers.length; i++) {
-        const h = (headers[i] || "").toString().trim().toLowerCase();
-        if (opts.indexOf(h) !== -1) return i;
-    }
-    // partial match fallback
-    for (let i = 0; i < headers.length; i++) {
-        const h = (headers[i] || "").toString().trim().toLowerCase();
-        for (const opt of opts) if (opt && h.indexOf(opt) !== -1) return i;
-    }
-    return -1;
+function _colIndex(headers, exactName) {
+  for (let i = 0; i < headers.length; i++) {
+    if (headers[i] === exactName) return i;
+  }
+  return -1;
 }
 
-function _generateNextClaimId(sheet, claimIdColIndex) {
-    // If we can't find column, just time-based
-    if (claimIdColIndex < 0) return "CLM-" + new Date().getTime();
+function _ensureColumn(sheet, headers, exactName) {
+  let idx = _colIndex(headers, exactName);
+  if (idx === -1) {
+    const newCol = headers.length + 1;
+    sheet.getRange(HEADER_ROW_INDEX, newCol).setValue(exactName);
+    headers.push(exactName);
+    idx = headers.length - 1;
+  }
+  return idx;
+}
 
-    const startRow = HEADER_ROW_INDEX + 1;
-    const lastRow = sheet.getLastRow();
-    if (lastRow < startRow) return "CLM-0001";
+function _ensureBodyColumns(sheet, headers, body) {
+  for (const key in body) {
+    if (!body.hasOwnProperty(key)) continue;
+    if (SHEET_BLACKLIST.indexOf(key) !== -1) continue;
+    if (_colIndex(headers, key) === -1) {
+      sheet.getRange(HEADER_ROW_INDEX, headers.length + 1).setValue(key);
+      headers.push(key);
+    }
+  }
+}
 
-    const vals = sheet.getRange(startRow, claimIdColIndex + 1, lastRow - HEADER_ROW_INDEX + 1, 1).getValues().flat();
-    let maxN = 0;
-    vals.forEach(v => {
-        const s = String(v || "");
-        const parts = s.split("-");
-        if (parts.length > 1) {
-            const n = parseInt(parts[1], 10);
-            if (!isNaN(n) && n > maxN) maxN = n;
+function _currentIst() {
+  return Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+}
+
+/**
+ * ROBUST row matching:
+ * 1. Exact match in Claim ID column
+ * 2. Exact match in SR No column  
+ * 3. Legacy CLM lookup in SR No column
+ * 4. BRUTE FORCE: scan every cell in every row for the CLM value
+ *    (handles any column arrangement, old rows, etc.)
+ */
+function _findRowIndex(sheet, headers, incomingClaimId, incomingSrNo, legacyLookup) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= HEADER_ROW_INDEX) return -1;
+
+  const dataRows  = lastRow - HEADER_ROW_INDEX;
+  const numCols   = headers.length;
+
+  // Read ALL row data at once (one API call)
+  const allData = sheet.getRange(HEADER_ROW_INDEX + 1, 1, dataRows, numCols).getValues();
+
+  const claimIdColIdx = _colIndex(headers, CLAIM_ID_COLUMN);
+  const srNoColIdx    = _colIndex(headers, SR_NO_COLUMN);
+
+  for (let i = 0; i < dataRows; i++) {
+    const row = allData[i].map(String);
+
+    // 1. Claim ID column match (most reliable for new rows)
+    if (incomingClaimId && claimIdColIdx !== -1 && row[claimIdColIdx] === incomingClaimId) {
+      Logger.log("Found row " + (HEADER_ROW_INDEX + 1 + i) + " via Claim ID column");
+      return HEADER_ROW_INDEX + 1 + i;
+    }
+    // 2. SR No column match (real SR numbers)
+    if (incomingSrNo && srNoColIdx !== -1 && row[srNoColIdx] === incomingSrNo) {
+      Logger.log("Found row " + (HEADER_ROW_INDEX + 1 + i) + " via SR No match");
+      return HEADER_ROW_INDEX + 1 + i;
+    }
+    // 3. Legacy CLM value stored in SR No column
+    if (legacyLookup && srNoColIdx !== -1 && row[srNoColIdx] === legacyLookup) {
+      Logger.log("Found row " + (HEADER_ROW_INDEX + 1 + i) + " via legacy SR No lookup");
+      return HEADER_ROW_INDEX + 1 + i;
+    }
+    // 4. BRUTE FORCE: search every cell in this row for the CLM value
+    if (incomingClaimId) {
+      for (let c = 0; c < row.length; c++) {
+        if (row[c] === incomingClaimId) {
+          Logger.log("Found row " + (HEADER_ROW_INDEX + 1 + i) + " via brute-force scan (col " + c + ")");
+          return HEADER_ROW_INDEX + 1 + i;
         }
-    });
-    return "CLM-" + String(maxN + 1).padStart(4, "0");
+      }
+    }
+  }
+  Logger.log("Row NOT found for Claim ID: " + incomingClaimId + " / SR No: " + incomingSrNo);
+  return -1;
 }
 
-function _currentIstIso() {
-    return Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
-}
-
+// -----------------------------------------
+// POST handler
+// -----------------------------------------
 function doPost(e) {
-    const lock = LockService.getScriptLock();
-    lock.tryLock(10000); // Wait up to 10s for other concurrent requests
+  const lock = LockService.getScriptLock();
+  lock.tryLock(10000);
 
-    try {
-        var body = {};
-        if (e.postData && e.postData.contents) {
-            body = JSON.parse(e.postData.contents);
-        } else if (e.parameter) {
-            body = e.parameter;
-        }
-
-        var sheet = _getSheet();
-        var headers = _readHeaders(sheet);
-
-        // Map critical columns
-        var colMap = {
-            "Claim ID": _findHeaderIndex(headers, ["Claim ID", "claimid", "id"]),
-            "Date": _findHeaderIndex(headers, ["Date", "Submitted Date"]),
-            "Customer Name": _findHeaderIndex(headers, ["Customer Name", "customer"]),
-            "Mobile Number": _findHeaderIndex(headers, ["Mobile Number", "mobile no", "mobile"]),
-            "Status": _findHeaderIndex(headers, ["Status"]),
-            "Last Updated": _findHeaderIndex(headers, ["Last Updated Timestamp", "last updated"])
-        };
-
-        // Determine Claim ID
-        var incomingId = body["Claim ID"] || body["claim_id"];
-
-        // If incomingId is missing, generate one (New Submission without ID from Python?)
-        // Python usually sends "CLM-..."
-        if (!incomingId && colMap["Claim ID"] !== -1) {
-            incomingId = _generateNextClaimId(sheet, colMap["Claim ID"]);
-        }
-
-        // Construct the Row Data Array
-        var rowData = new Array(headers.length).fill("");
-
-        // Helper to fill row data
-        function fillRow(r) {
-            for (var i = 0; i < headers.length; i++) {
-                var headerName = headers[i];
-                // Check exact match in payload
-                if (body.hasOwnProperty(headerName)) {
-                    r[i] = body[headerName];
-                } else {
-                    // Check normalized keys match (e.g. "claim_id" -> "Claim ID")
-                    // (Skipping complex normalization for now, relying on Python to send exact headers is safer
-                    //  OR simple keys if Python sends simple keys. Python currently sends "Claim ID" etc.)
-                }
-            }
-            // Explicit overrides if keys differ slightly in body
-            if (colMap["Claim ID"] !== -1) r[colMap["Claim ID"]] = incomingId;
-            if (colMap["Last Updated"] !== -1) r[colMap["Last Updated"]] = _currentIstIso();
-            return r;
-        }
-
-        rowData = fillRow(rowData);
-
-        // UPSERT LOGIC: Check if ID exists
-        var claimIdIdx = colMap["Claim ID"];
-        var rowIndexToUpdate = -1;
-
-        if (claimIdIdx !== -1 && incomingId) {
-            var lastRow = sheet.getLastRow();
-            if (lastRow > HEADER_ROW_INDEX) {
-                var ids = sheet.getRange(HEADER_ROW_INDEX + 1, claimIdIdx + 1, lastRow - HEADER_ROW_INDEX, 1).getValues().flat();
-                for (var i = 0; i < ids.length; i++) {
-                    if (String(ids[i]) === String(incomingId)) {
-                        rowIndexToUpdate = HEADER_ROW_INDEX + 1 + i;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (rowIndexToUpdate !== -1) {
-            // Update existing row
-            // FETCH EXISTING DATA FIRST to avoid overwriting with blanks
-            var existingValues = sheet.getRange(rowIndexToUpdate, 1, 1, headers.length).getValues()[0];
-
-            // Merge existing with new
-            for (var i = 0; i < headers.length; i++) {
-                var headerName = headers[i];
-                if (body.hasOwnProperty(headerName)) {
-                    existingValues[i] = body[headerName];
-                }
-            }
-
-            // Still update forced fields
-            if (colMap["Last Updated"] !== -1) existingValues[colMap["Last Updated"]] = _currentIstIso();
-
-            sheet.getRange(rowIndexToUpdate, 1, 1, existingValues.length).setValues([existingValues]);
-
-            // Format Date column as plain text to prevent auto-formatting
-            var dateColIdx = colMap["Date"];
-            if (dateColIdx !== -1) {
-                sheet.getRange(rowIndexToUpdate, dateColIdx + 1).setNumberFormat('@STRING@');
-            }
-
-            return ContentService.createTextOutput(JSON.stringify({
-                "status": "updated",
-                "row": rowIndexToUpdate,
-                "claim_id": incomingId
-            })).setMimeType(ContentService.MimeType.JSON);
-
-        } else {
-            // Append new row - Use the constructed rowData which is based on payload + blanks
-            // (Since it's new, blanks are fine for missing fields)
-            sheet.appendRow(rowData);
-
-            // Format Date column as plain text to prevent auto-formatting
-            var dateColIdx = colMap["Date"];
-            if (dateColIdx !== -1) {
-                var newRowIndex = sheet.getLastRow();
-                sheet.getRange(newRowIndex, dateColIdx + 1).setNumberFormat('@STRING@');
-            }
-
-            return ContentService.createTextOutput(JSON.stringify({
-                "status": "created",
-                "claim_id": incomingId
-            })).setMimeType(ContentService.MimeType.JSON);
-        }
-
-    } catch (e) {
-        return ContentService.createTextOutput(JSON.stringify({
-            "status": "error",
-            "message": e.toString()
-        })).setMimeType(ContentService.MimeType.JSON);
-
-    } finally {
-        lock.releaseLock();
+  try {
+    var body = {};
+    if (e.postData && e.postData.contents) {
+      body = JSON.parse(e.postData.contents);
+    } else if (e.parameter) {
+      body = e.parameter;
     }
+
+    Logger.log("Received payload: " + JSON.stringify(body));
+
+    const sheet = _getSheet();
+    var headers = _readHeaders(sheet);
+
+    _ensureColumn(sheet, headers, CLAIM_ID_COLUMN);
+    _ensureColumn(sheet, headers, SR_NO_COLUMN);
+    _ensureBodyColumns(sheet, headers, body);
+    headers = _readHeaders(sheet);
+
+    const claimIdColIdx    = _colIndex(headers, CLAIM_ID_COLUMN);
+    const srNoColIdx       = _colIndex(headers, SR_NO_COLUMN);
+    const submittedDateIdx = _colIndex(headers, "Submitted Date");
+    const mobileIdx        = _colIndex(headers, "Mobile");
+
+    const incomingClaimId = String(body[CLAIM_ID_COLUMN] || body["claim_id"] || "").trim();
+    const incomingSrNo    = String(body[SR_NO_COLUMN]    || body["sr_no"]    || "").trim();
+    const legacyLookup    = String(body["_legacy_sr_lookup"] || "").trim();
+
+    Logger.log("incomingClaimId=" + incomingClaimId + " incomingSrNo=" + incomingSrNo + " legacyLookup=" + legacyLookup);
+
+    const rowIndex = _findRowIndex(sheet, headers, incomingClaimId, incomingSrNo, legacyLookup);
+
+    if (rowIndex !== -1) {
+      // UPDATE existing row
+      var existingRange  = sheet.getRange(rowIndex, 1, 1, headers.length);
+      var existingValues = existingRange.getValues()[0];
+      while (existingValues.length < headers.length) existingValues.push("");
+
+      // Merge payload (skip blacklisted columns)
+      for (let i = 0; i < headers.length; i++) {
+        const h = headers[i];
+        if (SHEET_BLACKLIST.indexOf(h) !== -1) continue;
+        if (h === "_legacy_sr_lookup") continue;
+        if (body.hasOwnProperty(h)) existingValues[i] = body[h];
+      }
+
+      // Handle header aliases
+      if (submittedDateIdx !== -1 && (body["Submitted Date"] || body["Date"])) {
+        existingValues[submittedDateIdx] = body["Submitted Date"] || body["Date"];
+      }
+      if (mobileIdx !== -1 && (body["Mobile"] || body["Mobile Number"])) {
+        existingValues[mobileIdx] = body["Mobile"] || body["Mobile Number"];
+      }
+
+      // Always write Claim ID to its dedicated column
+      if (claimIdColIdx !== -1 && incomingClaimId) {
+        existingValues[claimIdColIdx] = incomingClaimId;
+      }
+
+      // Write SR No: only real SR Nos (not CLM-XXXXX values)
+      if (srNoColIdx !== -1) {
+        if (incomingSrNo && !incomingSrNo.startsWith("CLM-")) {
+          // Real SR No — write it
+          existingValues[srNoColIdx] = incomingSrNo;
+        } else if (!incomingSrNo) {
+          // No SR No in this update — preserve existing value (do nothing)
+        }
+        // Clear CLM legacy from SR No if it was there
+        if (existingValues[srNoColIdx] && String(existingValues[srNoColIdx]).startsWith("CLM-")) {
+          existingValues[srNoColIdx] = "";
+        }
+      }
+
+      sheet.getRange(rowIndex, 1, 1, existingValues.length).setValues([existingValues]);
+      if (submittedDateIdx !== -1) {
+        sheet.getRange(rowIndex, submittedDateIdx + 1).setNumberFormat("@STRING@");
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "updated", row: rowIndex, claim_id: incomingClaimId, sr_no: incomingSrNo
+      })).setMimeType(ContentService.MimeType.JSON);
+
+    } else {
+      // INSERT new row
+      const rowData = new Array(headers.length).fill("");
+
+      for (let i = 0; i < headers.length; i++) {
+        const h = headers[i];
+        if (SHEET_BLACKLIST.indexOf(h) !== -1) continue;
+        if (h === "_legacy_sr_lookup") continue;
+        if (body.hasOwnProperty(h)) rowData[i] = body[h];
+      }
+
+      // Handle header aliases
+      if (submittedDateIdx !== -1 && (body["Submitted Date"] || body["Date"])) {
+        rowData[submittedDateIdx] = body["Submitted Date"] || body["Date"];
+      }
+      if (mobileIdx !== -1 && (body["Mobile"] || body["Mobile Number"])) {
+        rowData[mobileIdx] = body["Mobile"] || body["Mobile Number"];
+      }
+
+      // CLM -> Claim ID column (NOT SR No)
+      if (claimIdColIdx !== -1 && incomingClaimId) rowData[claimIdColIdx] = incomingClaimId;
+
+      // SR No: blank for new claims, real value only if explicitly provided
+      if (srNoColIdx !== -1) {
+        rowData[srNoColIdx] = (incomingSrNo && !incomingSrNo.startsWith("CLM-")) ? incomingSrNo : "";
+      }
+
+      sheet.appendRow(rowData);
+
+      if (submittedDateIdx !== -1) {
+        sheet.getRange(sheet.getLastRow(), submittedDateIdx + 1).setNumberFormat("@STRING@");
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "created", claim_id: incomingClaimId
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+  } catch (err) {
+    Logger.log("ERROR: " + err.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error", message: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
+// -----------------------------------------
+// GET handler
+// -----------------------------------------
 function doGet(e) {
-    try {
-        var sheet = _getSheet();
-        var headers = _readHeaders(sheet);
-        var data = sheet.getDataRange().getValues();
-
-        // Remove headers
-        if (data.length > HEADER_ROW_INDEX) {
-            data = data.slice(HEADER_ROW_INDEX);
-        } else {
-            return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
-        }
-
-        // Find Date column index
-        var dateColIndex = _findHeaderIndex(headers, ["Date", "Submitted Date"]);
-
-        var result = [];
-        for (var i = 0; i < data.length; i++) {
-            var row = data[i];
-            var obj = {};
-            for (var c = 0; c < headers.length; c++) {
-                var header = headers[c];
-                // Normalize header to key if needed, or keep original
-                // Using original headers ensures consistency with the Sheet
-                if (header) {
-                    var value = row[c];
-
-                    // Format Date columns as YYYY-MM-DD strings
-                    if (c === dateColIndex && value instanceof Date) {
-                        value = Utilities.formatDate(value, "Asia/Kolkata", "yyyy-MM-dd");
-                    } else if (value instanceof Date) {
-                        // Format any other Date objects
-                        value = Utilities.formatDate(value, "Asia/Kolkata", "yyyy-MM-dd");
-                    }
-
-                    obj[header] = value;
-                }
-            }
-            result.push(obj);
-        }
-
-        return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
-    } catch (e) {
-        return ContentService.createTextOutput(JSON.stringify({ "error": e.toString() })).setMimeType(ContentService.MimeType.JSON);
+  try {
+    const sheet   = _getSheet();
+    const headers = _readHeaders(sheet);
+    var   data    = sheet.getDataRange().getValues();
+    if (data.length <= HEADER_ROW_INDEX) {
+      return ContentService.createTextOutput(JSON.stringify([]))
+        .setMimeType(ContentService.MimeType.JSON);
     }
+    data = data.slice(HEADER_ROW_INDEX);
+    const result = data.map(row => {
+      const obj = {};
+      for (let c = 0; c < headers.length; c++) {
+        if (!headers[c]) continue;
+        let val = row[c];
+        if (val instanceof Date) val = Utilities.formatDate(val, "Asia/Kolkata", "yyyy-MM-dd");
+        obj[headers[c]] = val;
+      }
+      return obj;
+    });
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ error: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// -----------------------------------------
+// onEdit trigger for Webhook integration
+// -----------------------------------------
+function onEdit(e) {
+  if (!e || !e.range) return;
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== SHEET_NAME) return;
+  
+  const headers = _readHeaders(sheet);
+  const editedRow = e.range.getRow();
+  const editedCol = e.range.getColumn();
+  
+  if (editedRow <= HEADER_ROW_INDEX) return; // ignore header edits
+  
+  const headerName = headers[editedCol - 1];
+  const lowerHeader = (headerName || "").toLowerCase();
+  
+  // Only trigger webhook if Remarks or ONSITEGO - STATUS are edited
+  if (lowerHeader === "remarks" || lowerHeader.includes("onsitego") && lowerHeader.includes("status")) {
+    const claimIdIdx = _colIndex(headers, CLAIM_ID_COLUMN);
+    if (claimIdIdx === -1) return;
+    
+    // Read the whole row to send to webhook
+    const rowValues = sheet.getRange(editedRow, 1, 1, headers.length).getValues()[0];
+    const claimId = rowValues[claimIdIdx];
+    
+    if (!claimId) return; // No claim ID, cannot sync back
+    
+    const payload = {};
+    for (let i = 0; i < headers.length; i++) {
+      if (headers[i]) {
+        let val = rowValues[i];
+        if (val instanceof Date) val = Utilities.formatDate(val, "Asia/Kolkata", "yyyy-MM-dd");
+        payload[headers[i]] = val;
+      }
+    }
+    
+    // IMPORTANT: Replace this with your actual portal domain (e.g. https://my-portal.onrender.com)
+    const PORTAL_URL = "YOUR_PORTAL_URL_HERE"; 
+    
+    if (PORTAL_URL === "YOUR_PORTAL_URL_HERE") {
+      Logger.log("Please update PORTAL_URL in the Apps Script to sync back to the portal.");
+      return;
+    }
+    
+    const webhookUrl = PORTAL_URL + "/api/webhook/sheet-update";
+    
+    try {
+      const options = {
+        method: "post",
+        contentType: "application/json",
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+      };
+      UrlFetchApp.fetch(webhookUrl, options);
+    } catch (err) {
+      Logger.log("Failed to hit webhook: " + err);
+    }
+  }
 }

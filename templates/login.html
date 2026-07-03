@@ -247,6 +247,7 @@
             {% endwith %}
 
             <form action="{{ url_for('login') }}" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
                 <div class="form-group">
                     <label>Username</label>
                     <div class="input-wrapper">
@@ -268,6 +269,10 @@
                     Sign In to Portal
                 </button>
             </form>
+
+            <a href="{{ url_for('forgot_password') }}" class="footer-text" style="text-decoration: none; display: inline-block; margin-bottom: 2rem;">
+                Forgot Password?
+            </a>
 
             <div class="footer-text">
                 OSG myG Portal v2.0 &copy; 2025

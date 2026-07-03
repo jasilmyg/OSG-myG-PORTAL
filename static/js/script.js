@@ -429,7 +429,6 @@ function filterClaims(type) {
     for (let i = 1; i < tr.length; i++) {
         const row = tr[i];
         const isComplete = row.getAttribute('data-completed') === 'true';
-        const rowStatus = (row.getAttribute('data-status') || '').toLowerCase().trim();
 
         if (type === 'all') {
             row.style.display = "";
@@ -438,9 +437,6 @@ function filterClaims(type) {
             else row.style.display = "none";
         } else if (type === 'completed') {
             if (isComplete) row.style.display = "";
-            else row.style.display = "none";
-        } else if (type === 'cancelled') {
-            if (rowStatus === 'cancelled') row.style.display = "";
             else row.style.display = "none";
         }
     }
@@ -753,3 +749,41 @@ const d = new Date();
 const dateStr = d.toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 const dateEl = document.getElementById('currentDate');
 if (dateEl) dateEl.textContent = dateStr;
+
+// Spare Parts Notification
+async function notifySparePartsPending() {
+    if (!currentClaimId) return;
+    
+    if (!confirm("Are you sure you want to send the 'Spare Parts Pending' WhatsApp notification to this customer?")) {
+        return;
+    }
+    
+    const btn = document.getElementById('btn-notify-spare');
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<i class="ri-loader-4-line spin"></i> Sending...';
+    btn.disabled = true;
+    
+    try {
+        const res = await fetch(`/api/notify-spare-parts/${currentClaimId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+            alert("Notification sent successfully!");
+            closeModal();
+            window.location.reload();
+        } else {
+            alert("Failed to send notification: " + (data.message || "Unknown error"));
+        }
+    } catch (e) {
+        console.error(e);
+        alert("Error sending notification.");
+    } finally {
+        if(btn) {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }
+    }
+}
