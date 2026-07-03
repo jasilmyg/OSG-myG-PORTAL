@@ -362,8 +362,6 @@ class ClaimWrapper:
         
         # Try multiple date formats
         formats_to_try = [
-            '%Y-%d-%m %H:%M:%S',
-            '%Y-%d-%m',
             '%Y-%m-%d %H:%M:%S',  # 2025-12-17 10:30:00
             '%Y-%m-%d',           # 2025-12-17
             '%d-%m-%Y',           # 17-12-2025
@@ -568,14 +566,8 @@ class ClaimWrapper:
         if self.claim_settled_date and (self.data.get("Date") or self.data.get("Submitted Date")):
             try:
                 s_date = self.data.get("Date") or self.data.get("Submitted Date")
-                try:
-                    submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%d-%m')
-                except Exception:
-                    submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%m-%d')
-                try:
-                    settled = datetime.datetime.strptime(str(self.claim_settled_date).split()[0], '%Y-%d-%m')
-                except Exception:
-                    settled = datetime.datetime.strptime(str(self.claim_settled_date).split()[0], '%Y-%m-%d')
+                submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%m-%d')
+                settled = datetime.datetime.strptime(str(self.claim_settled_date).split()[0], '%Y-%m-%d')
                 return (settled - submitted).days
             except Exception as e:
                 return None
@@ -683,7 +675,7 @@ def dashboard():
         if not raw or str(raw).strip() in ('', 'nan', 'None'): return None
         s = str(raw).strip()[:10]
         dt = None
-        for fmt in ('%Y-%d-%m', '%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
+        for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
             try:
                 dt = datetime.datetime.strptime(s, fmt)
                 break
@@ -706,18 +698,14 @@ def dashboard():
         repl_age = age  # default fallback
         if settled_date_raw and str(settled_date_raw).strip() not in ('', 'nan', 'None'):
             try:
-                settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%d-%m')
+                settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%m-%d')
                 repl_age = (now - settled_dt).days
             except Exception:
                 try:
-                    settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%m-%d')
+                    settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%d-%m-%Y')
                     repl_age = (now - settled_dt).days
                 except Exception:
-                    try:
-                        settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%d-%m-%Y')
-                        repl_age = (now - settled_dt).days
-                    except Exception:
-                        repl_age = age  # keep submitted-date age if parsing fails
+                    repl_age = age  # keep submitted-date age if parsing fails
 
         status = (c.status or "").strip().lower()
         is_replacement_claim = "replacement" in status
@@ -838,18 +826,14 @@ def download_report():
         repl_age = age
         if settled_date_raw and str(settled_date_raw).strip() not in ('', 'nan', 'None'):
             try:
-                settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%d-%m')
+                settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%m-%d')
                 repl_age = (now - settled_dt).days
             except Exception:
                 try:
-                    settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%m-%d')
+                    settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%d-%m-%Y')
                     repl_age = (now - settled_dt).days
                 except Exception:
-                    try:
-                        settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%d-%m-%Y')
-                        repl_age = (now - settled_dt).days
-                    except Exception:
-                        repl_age = age
+                    repl_age = age
 
         status = (c.status or "").strip().lower()
         is_replacement_claim = "replacement" in status
@@ -1881,18 +1865,14 @@ def claim_status():
         repl_age = age
         if settled_date_raw and str(settled_date_raw).strip() not in ('', 'nan', 'None'):
             try:
-                settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%d-%m')
+                settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%m-%d')
                 repl_age = (now - settled_dt).days
             except Exception:
                 try:
-                    settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%Y-%m-%d')
+                    settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%d-%m-%Y')
                     repl_age = (now - settled_dt).days
                 except Exception:
-                    try:
-                        settled_dt = datetime.datetime.strptime(str(settled_date_raw).strip()[:10], '%d-%m-%Y')
-                        repl_age = (now - settled_dt).days
-                    except Exception:
-                        repl_age = age
+                    repl_age = age
 
         status = (c.status or "").strip().lower()
 
@@ -1938,7 +1918,7 @@ def claim_status():
                     if not raw or str(raw).strip() in ('', 'nan', 'None'): return None
                     s = str(raw).strip()[:10]
                     dt = None
-                    for fmt in ('%Y-%d-%m', '%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
+                    for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
                         try:
                             dt = datetime.datetime.strptime(s, fmt)
                             break
@@ -2081,14 +2061,8 @@ def get_analytics_data():
             if claim.claim_settled_date and (claim.data.get("Date") or claim.data.get("Submitted Date")):
                 try:
                     s_date = claim.data.get("Date") or claim.data.get("Submitted Date")
-                    try:
-                        submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%d-%m')
-                    except Exception:
-                        submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%m-%d')
-                    try:
-                        settled = datetime.datetime.strptime(str(claim.claim_settled_date).split()[0], '%Y-%d-%m')
-                    except Exception:
-                        settled = datetime.datetime.strptime(str(claim.claim_settled_date).split()[0], '%Y-%m-%d')
+                    submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%m-%d')
+                    settled = datetime.datetime.strptime(str(claim.claim_settled_date).split()[0], '%Y-%m-%d')
                     tat = (settled - submitted).days
                 except:
                     tat = None
