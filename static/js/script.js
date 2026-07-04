@@ -473,7 +473,7 @@ async function openClaimModal(id) {
         setText('disp_date', formatDate(data.date));
         setText('disp_osid', data.osid);
         setText('disp_invoice', data.invoice_no);
-        setText('disp_srno', data.serial_no);
+        setText('disp_srno', data.sr_no || data.serial_no);
 
         const issueBox = document.getElementById('disp_issue');
         if (issueBox) issueBox.textContent = data.issue || "No issue description provided.";
