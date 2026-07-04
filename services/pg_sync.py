@@ -23,11 +23,8 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Column definitions — these map 1-to-1 with the Google Sheet headers
-# Add any new sheet columns here so the table stays in sync automatically.
-# ---------------------------------------------------------------------------
 SHEET_COLUMNS = [
     "Claim ID",
-    "Date",
     "Customer Name",
     "Mobile Number",
     "Address",
@@ -82,9 +79,9 @@ SHEET_COLUMNS = [
 # Postgres-safe column name mapping  (Sheet Header → DB column name)
 def _pg_col(name: str) -> str:
     """Convert a Sheet column header to a safe PostgreSQL column name."""
+    clean_name = name.strip().lower()
     return (
-        name.strip()
-        .lower()
+        clean_name
         .replace(" ", "_")
         .replace("-", "_")
         .replace("(", "")
