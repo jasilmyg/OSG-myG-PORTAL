@@ -1323,13 +1323,35 @@ def get_claim(id):
             return False
         return str(val).strip().lower() in ['yes', 'true', '1']
     
+    invoice_no = found.invoice_no or ""
+    serial_no = found.serial_no or ""
+    osid = found.osid or ""
+    
+    # Fetch from osid_data if missing
+    if not invoice_no or not osid or not serial_no:
+        try:
+            from services.pg_sync import _get_connection
+            import psycopg2.extras
+            conn = _get_connection()
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                mobile = str(found.mobile_no or "").strip()
+                if mobile:
+                    cur.execute("SELECT osid, invoice_no, serial_no FROM osid_data WHERE mobile_no = %s ORDER BY id DESC LIMIT 1;", (mobile,))
+                    row = cur.fetchone()
+                    if row:
+                        osid = osid or (row.get('osid') or "")
+                        invoice_no = invoice_no or (row.get('invoice_no') or "")
+                        serial_no = serial_no or (row.get('serial_no') or "")
+        except Exception as e:
+            print(f"Error fetching from osid_data: {e}")
+
     return jsonify({
         "id": found.claim_id,
         "date": found.created_at.strftime('%Y-%m-%d'),
         "customer_name": found.customer_name,
         "mobile_no": found.mobile_no or "",
-        "invoice_no": found.invoice_no or "",
-        "serial_no": found.serial_no or "",
+        "invoice_no": invoice_no,
+        "serial_no": serial_no,
         "model": found.model or "",
         "issue": found.issue or "",
         "address": found.address or "",
@@ -1356,7 +1378,7 @@ def get_claim(id):
         "tat": found.tat,
         "assigned_staff": found.assigned_staff or "",
         "sr_no": found.sr_no or "",
-        "osid": found.osid or ""
+        "osid": osid
     })
 
 @app.route('/update-claim/<string:id>', methods=['POST'])
