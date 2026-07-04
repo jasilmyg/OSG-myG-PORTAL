@@ -360,6 +360,18 @@ class ClaimWrapper:
         if not d: return datetime.datetime.now()
         s = str(d).strip()
         
+        # Check if it's an ISO 8601 string (e.g. 2026-07-03T18:30:00.000Z)
+        if 'T' in s and s.endswith('Z'):
+            try:
+                import pytz
+                s_clean = s.replace('T', ' ')[:19]
+                dt_utc = datetime.datetime.strptime(s_clean, '%Y-%m-%d %H:%M:%S')
+                dt_utc = dt_utc.replace(tzinfo=pytz.UTC)
+                ist = pytz.timezone('Asia/Kolkata')
+                return dt_utc.astimezone(ist).replace(tzinfo=None)
+            except (ValueError, TypeError):
+                pass
+                
         # Try multiple date formats
         formats_to_try = [
             '%Y-%m-%d %H:%M:%S',  # 2025-12-17 10:30:00
