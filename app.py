@@ -1213,6 +1213,23 @@ def submit_claim():
                     f.save(path)
                     saved_paths.append(path)
 
+            # Lookup missing fields from osid_data
+            if not item_osid or not item_invoice or not item_serial:
+                try:
+                    from services.pg_sync import _get_connection
+                    import psycopg2.extras
+                    conn = _get_connection()
+                    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                        if mobile:
+                            cur.execute("SELECT osid, invoice_no, serial_no FROM osid_data WHERE mobile_no = %s ORDER BY id DESC LIMIT 1;", (mobile,))
+                            row = cur.fetchone()
+                            if row:
+                                item_osid = item_osid or (row.get('osid') or "")
+                                item_invoice = item_invoice or (row.get('invoice_no') or "")
+                                item_serial = item_serial or (row.get('serial_no') or "")
+                except Exception as e:
+                    print(f"Error lookup osid_data on submit: {e}")
+
             # Build claim object with sanitized values
             unique_suffix = int(time.time()) + idx
             new_claim = {
