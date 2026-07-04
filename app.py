@@ -356,7 +356,7 @@ class ClaimWrapper:
     @property
     def created_at(self): 
         # Parse date string
-        d = self.data.get("Date")
+        d = self.data.get("Date") or self.data.get("date")
         if not d: return datetime.datetime.now()
         s = str(d).strip()
         
