@@ -276,7 +276,21 @@ def upsert_claim_to_postgres(claim_data: dict) -> dict:
             for raw_key, val in claim_data.items():
                 pg = _pg_col(raw_key)
                 if pg and pg != "claim_id":
-                    col_vals[pg] = str(val) if val is not None else None
+                    v_str = str(val) if val is not None else None
+                    
+                    # Convert UTC ISO strings to IST YYYY-MM-DD before saving to DB
+                    if pg == 'date' and v_str and 'T' in v_str and v_str.endswith('Z'):
+                        try:
+                            import pytz
+                            s_clean = v_str.replace('T', ' ')[:19]
+                            dt_utc = datetime.datetime.strptime(s_clean, '%Y-%m-%d %H:%M:%S')
+                            dt_utc = dt_utc.replace(tzinfo=pytz.UTC)
+                            ist = pytz.timezone('Asia/Kolkata')
+                            v_str = dt_utc.astimezone(ist).strftime('%Y-%m-%d')
+                        except Exception:
+                            pass
+                            
+                    col_vals[pg] = v_str
 
             # Always stamp the sync time
             col_vals["synced_at"] = datetime.datetime.utcnow().isoformat()
