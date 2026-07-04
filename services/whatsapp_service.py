@@ -144,7 +144,7 @@ def send_whatsapp_message(mobile: str, template_name: str, params: list) -> dict
     try:
         # ── CUTOFF DATE CHECK ─────────────────────────────────────────────────
         from datetime import date
-        cutoff_date = date(2026, 7, 3)
+        cutoff_date = date(2026, 7, 4)
         if date.today() <= cutoff_date:
             logger.info(f"[WHATSAPP_BLOCKED] Messages are disabled until after {cutoff_date.strftime('%d-%m-%Y')}.")
             return {"error": f"Blocked by cutoff date {cutoff_date.strftime('%d-%m-%Y')}", "blocked": True}
