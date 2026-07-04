@@ -563,9 +563,9 @@ class ClaimWrapper:
                 pass
         
         # Otherwise calculate it
-        if self.claim_settled_date and (self.data.get("Date") or self.data.get("Submitted Date")):
+        s_date = self.data.get("Date") or self.data.get("date") or self.data.get("Submitted Date")
+        if self.claim_settled_date and s_date:
             try:
-                s_date = self.data.get("Date") or self.data.get("Submitted Date")
                 submitted = datetime.datetime.strptime(str(s_date).split()[0], '%Y-%m-%d')
                 settled = datetime.datetime.strptime(str(self.claim_settled_date).split()[0], '%Y-%m-%d')
                 return (settled - submitted).days
