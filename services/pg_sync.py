@@ -297,7 +297,7 @@ def upsert_claim_to_postgres(claim_data: dict) -> dict:
             placeholders = sql.SQL(", ").join(sql.Placeholder() * len(cols))
             update_set = sql.SQL(", ").join(
                 sql.SQL("{} = EXCLUDED.{}").format(sql.Identifier(c), sql.Identifier(c))
-                for c in cols if c != "claim_id"
+                for c in cols if c not in ["claim_id", "date", "submitted_date"]
             )
 
             upsert_query = sql.SQL(
