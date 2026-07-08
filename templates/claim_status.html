@@ -311,9 +311,9 @@
                                 <div class="info-val">${claim.branch || '-'}</div>
                             </div>
                             <div class="status-info-item" style="grid-column: span 2;">
-                                <label><i class="ri-history-line" style="margin-right:4px;"></i>Latest Follow Up</label>
+                                <label><i class="ri-history-line" style="margin-right:4px;"></i>Follow Up History</label>
                                 <div class="info-val follow-up-box" style="background:#f9fafb;padding:0.75rem 1rem;border-radius:8px;margin-top:0.35rem;font-size:0.88rem;line-height:1.6;color:#4b5563;word-wrap:break-word;">
-                                    ${claim.follow_up_notes ? getLatestFollowUp(claim.follow_up_notes) : '<span style="color:#9ca3af;font-style:italic;">No follow-up notes yet</span>'}
+                                    ${claim.follow_up_notes ? formatFollowUpHistory(claim.follow_up_notes) : '<span style="color:#9ca3af;font-style:italic;">No follow-up notes yet</span>'}
                                 </div>
 
                             </div>
@@ -471,15 +471,14 @@
         return '';
     }
 
-    function getLatestFollowUp(notes) {
+    function formatFollowUpHistory(notes) {
         if (!notes) return '';
-        // Notes are formatted as: [date, time] message\n[date, time] message...
-        // Split by timestamp pattern and get the last entry
-        const entries = notes.split(/(?=\[)/);
-        const latest = entries.filter(e => e.trim()).pop();
-        if (!latest) return notes.trim();
-        // Clean up: trim each line to remove leading whitespace
-        return latest.split('\n').map(line => line.trim()).filter(l => l).join('\n');
+        const entries = notes.split(/(?=\[)/).filter(e => e.trim());
+        return entries.map(e => {
+            return '<div style="margin-bottom: 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px;">' + 
+                   e.split('\n').map(line => line.trim()).filter(l => l).join('<br>') + 
+                   '</div>';
+        }).join('');
     }
 
     function formatDate(dateStr) {
