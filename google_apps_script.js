@@ -315,8 +315,8 @@ function onEdit(e) {
   const headerName = headers[editedCol - 1];
   const lowerHeader = (headerName || "").toLowerCase();
   
-  // Only trigger webhook if Remarks or ONSITEGO - STATUS are edited
-  if (lowerHeader === "remarks" || lowerHeader.includes("onsitego") && lowerHeader.includes("status")) {
+  // Only trigger webhook if Remarks, ONSITEGO - STATUS, or SR No are edited
+  if (lowerHeader === "remarks" || (lowerHeader.includes("onsitego") && lowerHeader.includes("status")) || lowerHeader === "sr no" || lowerHeader === "sr_no") {
     const claimIdIdx = _colIndex(headers, CLAIM_ID_COLUMN);
     if (claimIdIdx === -1) return;
     
