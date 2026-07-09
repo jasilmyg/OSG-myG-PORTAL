@@ -67,7 +67,7 @@ SENDER_PASSWORD = os.environ.get('SENDER_PASSWORD')
 # WhatsApp Notification Cutoff
 # Claims registered BEFORE this date will NOT receive WhatsApp notifications.
 # Format: YYYY-MM-DD. Change this date as needed.
-WHATSAPP_CUTOFF_DATE = datetime.datetime(2026, 7, 10)
+WHATSAPP_CUTOFF_DATE = datetime.datetime(2026, 7, 9)
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
