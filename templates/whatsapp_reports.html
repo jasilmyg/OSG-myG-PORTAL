@@ -1,0 +1,272 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<div class="reports-container fade-in" style="padding: 2rem; max-width: 1400px; margin: 0 auto;">
+    <!-- Page Header -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+        <div>
+            <h1 style="font-size: 1.75rem; font-weight: 700; color: var(--text-main); margin-bottom: 0.25rem;">
+                <i class="ri-whatsapp-line" style="color: #25D366; margin-right: 8px;"></i>WhatsApp Reports
+            </h1>
+            <p style="color: var(--text-secondary); margin: 0; font-size: 0.95rem;">Analyze message delivery and failure metrics.</p>
+        </div>
+    </div>
+
+    <!-- Controls Section -->
+    <div class="glass-panel" style="padding: 1.5rem; margin-bottom: 2rem; display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-end;">
+        <div style="flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 0.5rem;">
+            <label for="fromDate" style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 600;"><i class="ri-calendar-event-line"></i> From Date</label>
+            <input type="date" class="filter-input" id="fromDate" required style="width: 100%; padding: 0.75rem; border: 1px solid var(--border-light); border-radius: 8px; font-family: inherit;">
+        </div>
+        <div style="flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 0.5rem;">
+            <label for="toDate" style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 600;"><i class="ri-calendar-event-line"></i> To Date</label>
+            <input type="date" class="filter-input" id="toDate" required style="width: 100%; padding: 0.75rem; border: 1px solid var(--border-light); border-radius: 8px; font-family: inherit;">
+        </div>
+        <div style="flex: 0.5; min-width: 150px;">
+            <button type="button" class="btn-primary" id="generateReportBtn" onclick="generateReport()" style="width: 100%; padding: 0.75rem 1.5rem; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 0.5rem; border: none; cursor: pointer; font-weight: 600;">
+                <i class="ri-flashlight-line"></i> Generate Report
+            </button>
+        </div>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loadingState" style="text-align: center; padding: 4rem 2rem; display: none;">
+        <div class="spinner"></div>
+        <h4 style="color: var(--text-main); margin-bottom: 0.5rem;" id="loadingText">Requesting download...</h4>
+        <p style="color: var(--text-secondary);">This may take a few moments depending on the date range.</p>
+    </div>
+
+    <!-- Error State -->
+    <div id="errorState" class="fade-in" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); color: #ef4444; padding: 1rem 1.5rem; border-radius: 12px; margin-bottom: 2rem; display: none; align-items: center; gap: 0.75rem; font-weight: 500;">
+        <i class="ri-error-warning-line"></i> <span id="errorText"></span>
+    </div>
+
+    <!-- Results Section -->
+    <div id="resultsSection" class="fade-in" style="display: none;">
+        <!-- Metric Cards -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+            
+            <div class="glass-panel" style="padding: 1.5rem; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid #3b82f6;">
+                <div style="font-size: 2.5rem; color: #3b82f6;"><i class="ri-send-plane-fill"></i></div>
+                <div style="text-align: right;">
+                    <h3 style="font-size: 2rem; font-weight: 700; margin: 0; color: var(--text-main);" id="statSent">0</h3>
+                    <p style="color: var(--text-secondary); margin: 0; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Sent</p>
+                </div>
+            </div>
+            
+            <div class="glass-panel" style="padding: 1.5rem; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid #10b981;">
+                <div style="font-size: 2.5rem; color: #10b981;"><i class="ri-check-double-fill"></i></div>
+                <div style="text-align: right;">
+                    <h3 style="font-size: 2rem; font-weight: 700; margin: 0; color: var(--text-main);" id="statDelivered">0</h3>
+                    <p style="color: var(--text-secondary); margin: 0; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Delivered</p>
+                </div>
+            </div>
+            
+            <div class="glass-panel" style="padding: 1.5rem; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid #8b5cf6;">
+                <div style="font-size: 2.5rem; color: #8b5cf6;"><i class="ri-mail-open-fill"></i></div>
+                <div style="text-align: right;">
+                    <h3 style="font-size: 2rem; font-weight: 700; margin: 0; color: var(--text-main);" id="statRead">0</h3>
+                    <p style="color: var(--text-secondary); margin: 0; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Read</p>
+                </div>
+            </div>
+            
+            <div class="glass-panel" style="padding: 1.5rem; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid #ef4444;">
+                <div style="font-size: 2.5rem; color: #ef4444;"><i class="ri-close-circle-fill"></i></div>
+                <div style="text-align: right;">
+                    <h3 style="font-size: 2rem; font-weight: 700; margin: 0; color: var(--text-main);" id="statFailed">0</h3>
+                    <p style="color: var(--text-secondary); margin: 0; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Failed</p>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Failure Analysis Table -->
+        <div class="glass-panel" style="padding: 1.5rem;">
+            <div style="font-size: 1.25rem; font-weight: 600; color: var(--text-main); padding-bottom: 1rem; border-bottom: 1px solid var(--border-light); margin-bottom: 1.5rem; display: flex; align-items: center;">
+                <i class="ri-error-warning-line" style="color: #f59e0b; margin-right: 8px;"></i>Failed Messages Log
+            </div>
+            
+            <div style="overflow-x: auto;" id="tableWrapper">
+                <table style="width: 100%; border-collapse: collapse;" id="failedTable">
+                    <thead>
+                        <tr>
+                            <th style="padding: 1rem; text-align: left; border-bottom: 1px solid var(--border-light); color: var(--text-secondary); font-weight: 600; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.5px;">Mobile Number</th>
+                            <th style="padding: 1rem; text-align: left; border-bottom: 1px solid var(--border-light); color: var(--text-secondary); font-weight: 600; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.5px;">Date</th>
+                            <th style="padding: 1rem; text-align: left; border-bottom: 1px solid var(--border-light); color: var(--text-secondary); font-weight: 600; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.5px;">Status</th>
+                            <th style="padding: 1rem; text-align: left; border-bottom: 1px solid var(--border-light); color: var(--text-secondary); font-weight: 600; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.5px;">Failure Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Data will be populated here -->
+                    </tbody>
+                </table>
+            </div>
+            
+            <div id="noFailures" style="text-align: center; padding: 3rem 1rem; display: none;">
+                <i class="ri-emotion-happy-line" style="font-size: 3rem; color: #10b981; opacity: 0.7; margin-bottom: 1rem; display: block;"></i>
+                <h5 style="color: var(--text-main); margin-bottom: 0.5rem; font-size: 1.25rem;">No Failed Messages!</h5>
+                <p style="color: var(--text-secondary); margin: 0;">All messages in this date range were delivered successfully.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .spinner {
+        width: 3rem;
+        height: 3rem;
+        border: 4px solid rgba(59, 130, 246, 0.2);
+        border-top-color: #3b82f6;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 0 auto 1.5rem auto;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    #failedTable tbody tr:hover {
+        background: rgba(0, 0, 0, 0.02);
+    }
+</style>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const today = new Date();
+        const lastWeek = new Date(today);
+        lastWeek.setDate(lastWeek.getDate() - 7);
+        
+        document.getElementById('toDate').value = today.toISOString().split('T')[0];
+        document.getElementById('fromDate').value = lastWeek.toISOString().split('T')[0];
+    });
+
+    async function generateReport() {
+        const fromDate = document.getElementById('fromDate').value;
+        const toDate = document.getElementById('toDate').value;
+        
+        if (!fromDate || !toDate) {
+            showError("Please select both From Date and To Date.");
+            return;
+        }
+
+        // UI Reset
+        document.getElementById('errorState').style.display = 'none';
+        document.getElementById('resultsSection').style.display = 'none';
+        document.getElementById('loadingState').style.display = 'block';
+        
+        const btn = document.getElementById('generateReportBtn');
+        btn.style.opacity = '0.7';
+        btn.style.pointerEvents = 'none';
+        
+        document.getElementById('loadingText').innerText = "Requesting download...";
+
+        try {
+            const reqRes = await fetch('/api/whatsapp/request-report', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fromDate, toDate })
+            });
+            const reqData = await reqRes.json();
+            
+            if (!reqRes.ok || !reqData.success) {
+                throw new Error(reqData.message || "Failed to request download from API.");
+            }
+
+            const fileId = reqData.fileID;
+            pollReport(fileId);
+
+        } catch (error) {
+            showError(error.message);
+        }
+    }
+
+    async function pollReport(fileId) {
+        document.getElementById('loadingText').innerText = "Processing report at Telfiny...";
+        
+        const maxRetries = 20;
+        let retries = 0;
+
+        const pollInterval = setInterval(async () => {
+            if (retries >= maxRetries) {
+                clearInterval(pollInterval);
+                showError("Report generation timed out. Please try a smaller date range.");
+                return;
+            }
+            retries++;
+
+            try {
+                const res = await fetch(`/api/whatsapp/poll-report/${fileId}`);
+                const data = await res.json();
+                
+                if (!res.ok) {
+                    clearInterval(pollInterval);
+                    throw new Error(data.message || "Error while polling for report.");
+                }
+
+                if (data.status === 'processing') {
+                    document.getElementById('loadingText').innerText = `Processing report... (Attempt ${retries})`;
+                    return;
+                }
+                
+                if (data.status === 'completed') {
+                    clearInterval(pollInterval);
+                    displayResults(data.data);
+                }
+
+            } catch (error) {
+                clearInterval(pollInterval);
+                showError(error.message);
+            }
+        }, 3000);
+    }
+
+    function displayResults(data) {
+        document.getElementById('loadingState').style.display = 'none';
+        const btn = document.getElementById('generateReportBtn');
+        btn.style.opacity = '1';
+        btn.style.pointerEvents = 'auto';
+        
+        document.getElementById('statSent').innerText = data.sent || 0;
+        document.getElementById('statDelivered').innerText = data.delivered || 0;
+        document.getElementById('statRead').innerText = data.read || 0;
+        document.getElementById('statFailed').innerText = data.failed || 0;
+        
+        const tbody = document.querySelector('#failedTable tbody');
+        tbody.innerHTML = '';
+        
+        if (data.failed_messages && data.failed_messages.length > 0) {
+            document.getElementById('noFailures').style.display = 'none';
+            document.getElementById('tableWrapper').style.display = 'block';
+            
+            data.failed_messages.forEach(msg => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td style="padding: 1rem; border-bottom: 1px solid var(--border-light); font-weight: 600; color: var(--text-main);">${msg.mobile || 'Unknown'}</td>
+                    <td style="padding: 1rem; border-bottom: 1px solid var(--border-light); color: var(--text-secondary);">${msg.date || 'Unknown'}</td>
+                    <td style="padding: 1rem; border-bottom: 1px solid var(--border-light);">
+                        <span style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 0.25rem 0.75rem; border-radius: 50px; font-size: 0.8rem; font-weight: 600;">Failed</span>
+                    </td>
+                    <td style="padding: 1rem; border-bottom: 1px solid var(--border-light); color: var(--text-secondary);">${msg.reason || 'Unknown Error'}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } else {
+            document.getElementById('tableWrapper').style.display = 'none';
+            document.getElementById('noFailures').style.display = 'block';
+        }
+        
+        document.getElementById('resultsSection').style.display = 'block';
+    }
+
+    function showError(message) {
+        document.getElementById('loadingState').style.display = 'none';
+        const btn = document.getElementById('generateReportBtn');
+        btn.style.opacity = '1';
+        btn.style.pointerEvents = 'auto';
+        
+        document.getElementById('errorText').innerText = message;
+        document.getElementById('errorState').style.display = 'flex';
+    }
+</script>
+{% endblock %}

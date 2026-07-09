@@ -52,6 +52,10 @@
                     class="nav-item {% if request.endpoint == 'reports_tools' %}active{% endif %}">
                     <i class="ri-file-chart-line"></i> Reports
                 </a>
+                <a href="{{ url_for('whatsapp_reports') }}"
+                    class="nav-item {% if request.endpoint == 'whatsapp_reports' %}active{% endif %}">
+                    <i class="ri-whatsapp-line"></i> WA Reports
+                </a>
                 <a href="{{ url_for('submit_claim') }}"
                     class="nav-item {% if request.endpoint == 'submit_claim' %}active{% endif %}">
                     <i class="ri-add-circle-line"></i> New Claim
