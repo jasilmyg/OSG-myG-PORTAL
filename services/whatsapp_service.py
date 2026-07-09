@@ -167,10 +167,19 @@ def send_whatsapp_message(mobile: str, template_name: str, params: list) -> dict
 
         # ── BUILD PAYLOAD ─────────────────────────────────────────────────────
         lang_code = "ml" if template_name in ["myg_onsitego_registered", "myg_onsitego_registered_main", "myg_onsitego_replacement_main", "myg_onsitego_repair_completed_main", "myg_onsitego_part_order_main"] else "en"
+        
+        # Inject Webhook URL (Trying multiple common keys since it's undocumented)
+        webhook = os.getenv('WEBHOOK_URL', 'https://your-domain.com/api/webhooks/telfiny')
+        
         payload = {
             "to": mobile_str,
             "phoneNumber": mobile_str,
             "type": "template",
+            "webhookUrl": webhook,
+            "webhook_url": webhook,
+            "callbackUrl": webhook,
+            "callback_url": webhook,
+            "dlr_url": webhook,
             "template": {
                 "name": template_name,
                 "language": {"code": lang_code},
