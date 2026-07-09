@@ -2228,23 +2228,38 @@ def generate_report_1():
                 return redirect(url_for('reports_tools'))
         # --- END VALIDATION ---
 
-        # Load Defaults (Assumed to be in BASE_DIR)
+        from services.pg_sync import _get_connection
+        import pandas as pd
+        
+        # Load Defaults from DB with Fallback to Excel
         store_list_path = os.path.join(BASE_DIR, "myG All Store.xlsx")
         rbm_path = os.path.join(BASE_DIR, "RBM,BDM,BRANCH.xlsx")
-        
-        if not os.path.exists(store_list_path) or not os.path.exists(rbm_path):
-            flash("Default Store/RBM files not found on server.", "error")
-            return redirect(url_for('reports_tools'))
 
-        future_store_df = timed_excel_read(store_list_path, "Store List", engine='openpyxl')
-        if 'Store' not in future_store_df.columns:
-            if 'Store Name' in future_store_df.columns: future_store_df.rename(columns={'Store Name': 'Store'}, inplace=True)
-            elif 'Branch' in future_store_df.columns: future_store_df.rename(columns={'Branch': 'Store'}, inplace=True)
+        try:
+            conn = _get_connection()
+            future_store_df = pd.read_sql('SELECT store as "Store" FROM myg_all_store', conn)
+            if future_store_df.empty: raise Exception("Empty DB table myg_all_store")
+        except Exception as e:
+            if not os.path.exists(store_list_path):
+                flash("Default Store file not found on server or DB.", "error")
+                return redirect(url_for('reports_tools'))
+            future_store_df = timed_excel_read(store_list_path, "Store List", engine='openpyxl')
+            if 'Store' not in future_store_df.columns:
+                if 'Store Name' in future_store_df.columns: future_store_df.rename(columns={'Store Name': 'Store'}, inplace=True)
+                elif 'Branch' in future_store_df.columns: future_store_df.rename(columns={'Branch': 'Store'}, inplace=True)
 
-        rbm_df = timed_excel_read(rbm_path, "RBM Mapping", engine='openpyxl')
-        if 'Store' not in rbm_df.columns:
-            if 'Store Name' in rbm_df.columns: rbm_df.rename(columns={'Store Name': 'Store'}, inplace=True)
-            elif 'Branch' in rbm_df.columns: rbm_df.rename(columns={'Branch': 'Store'}, inplace=True)
+        try:
+            conn = _get_connection()
+            rbm_df = pd.read_sql('SELECT branch as "Store", rbm as "RBM", bdm as "BDM" FROM rbm_bdm_branch', conn)
+            if rbm_df.empty: raise Exception("Empty DB table rbm_bdm_branch")
+        except Exception as e:
+            if not os.path.exists(rbm_path):
+                flash("Default RBM file not found on server or DB.", "error")
+                return redirect(url_for('reports_tools'))
+            rbm_df = timed_excel_read(rbm_path, "RBM Mapping", engine='openpyxl')
+            if 'Store' not in rbm_df.columns:
+                if 'Store Name' in rbm_df.columns: rbm_df.rename(columns={'Store Name': 'Store'}, inplace=True)
+                elif 'Branch' in rbm_df.columns: rbm_df.rename(columns={'Branch': 'Store'}, inplace=True)
 
         # Process logic from snippet
         # Optimization: Read only needed columns
@@ -2804,20 +2819,28 @@ def generate_report_2():
         except ValueError as e:
             flash(str(e), "error")
             return redirect(url_for('reports_tools'))
+        
         # --- END VALIDATION ---
 
+        from services.pg_sync import _get_connection
+        import pandas as pd
+        
         # Feature Store List
         future_path = os.path.join(BASE_DIR, "Future Store List.xlsx")
-        
-        if not os.path.exists(future_path):
-             flash("Future Store List.xlsx not found on server.", "error")
-             return redirect(url_for('reports_tools'))
-             
         try:
-            future_df = timed_excel_read(future_path, "Future Store List", engine='openpyxl') 
-        except:
-            future_df = timed_excel_read(future_path, engine='openpyxl')
-            
+            conn = _get_connection()
+            future_df = pd.read_sql('SELECT store as "Store" FROM future_store_list', conn)
+            if future_df.empty: raise Exception("Empty DB table future_store_list")
+        except Exception as e:
+            if not os.path.exists(future_path):
+                 flash("Future Store List.xlsx not found on server or DB.", "error")
+                 return redirect(url_for('reports_tools'))
+            try:
+                future_df = timed_excel_read(future_path, "Future Store List", engine='openpyxl')
+            except:
+                future_df = timed_excel_read(future_path, engine='openpyxl')
+
+        future_df = future_df.loc[:, ~future_df.columns.duplicated()]
         future_df = future_df.loc[:, ~future_df.columns.duplicated()]
 
         try:
