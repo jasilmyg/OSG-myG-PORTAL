@@ -1688,6 +1688,16 @@ def update_claim(id):
     # --- GOOGLE SHEET WEBHOOK UPDATE ---
     web_app_url = os.environ.get("WEB_APP_URL")
     if web_app_url:
+        # --- CUTOFF DATE GATE FOR SHEET UPDATE ---
+        # Block sheet updates for old backend claims to prevent them from appending to the bottom
+        claim_registered_date = existing_claim.created_at if existing_claim else None
+        if claim_registered_date:
+            reg_date_naive = claim_registered_date.replace(tzinfo=None)
+            if reg_date_naive < WHATSAPP_CUTOFF_DATE:
+                logging.info(f"[SHEET_UPDATE_BLOCKED] Claim {id} registered before cutoff. Skipping Google Sheets update.")
+                return jsonify({"success": True})
+        # --- END CUTOFF DATE GATE ---
+        
         import threading
         import requests
         
