@@ -1608,51 +1608,60 @@ def update_claim(id):
         return False
 
     # Replacement workflow fields (Columns O-T) - Use actual sheet column names
-    if 'replacement_confirmation' in data: payload["Customer Confirmation"] = fmt_bool(data['replacement_confirmation'])
+    if 'replacement_confirmation' in data:
+        payload["Customer Confirmation"] = fmt_bool(data['replacement_confirmation'])
+        payload["Replacement: Confirmation Pending"] = fmt_bool(data['replacement_confirmation'])  # keep legacy col in sync
     
     # Auto-date logic for: Approval Mail
-    if 'replacement_osg_approval' in data: 
+    if 'replacement_osg_approval' in data:
         payload["Approval Mail Received From Onsitego (Yes/No)"] = fmt_bool(data['replacement_osg_approval'])
+        payload["Replacement: OSG Approval"] = fmt_bool(data['replacement_osg_approval'])  # keep legacy col in sync
         # Check if we need to set date
         existing_date = existing_claim.approval_mail_date if existing_claim else None
         if should_update_date('replacement_osg_approval', existing_date):
              payload["Approval Mail Received Date"] = today_str
 
     # Auto-date logic for: Mail Sent To Store
-    if 'replacement_mail_store' in data: 
+    if 'replacement_mail_store' in data:
         payload["Mail Sent To Store (Yes/No)"] = fmt_bool(data['replacement_mail_store'])
+        payload["Replacement: Mail to Store"] = fmt_bool(data['replacement_mail_store'])  # keep legacy col in sync
         existing_date = existing_claim.mail_sent_to_store_date if existing_claim else None
         if should_update_date('replacement_mail_store', existing_date):
              payload["Mail Sent To Store Date"] = today_str
 
     # Auto-date logic for: Invoice Generated
-    if 'replacement_invoice_gen' in data: 
+    if 'replacement_invoice_gen' in data:
         payload["Invoice Generated (Yes/No)"] = fmt_bool(data['replacement_invoice_gen'])
+        payload["Replacement: Invoice Generated"] = fmt_bool(data['replacement_invoice_gen'])  # keep legacy col in sync
         existing_date = existing_claim.invoice_generated_date if existing_claim else None
         if should_update_date('replacement_invoice_gen', existing_date):
              payload["Invoice Generated Date"] = today_str
 
     # Auto-date logic for: Invoice Sent To Onsitego
-    if 'replacement_invoice_sent' in data: 
+    if 'replacement_invoice_sent' in data:
         payload["Invoice Sent To Onsitego (Yes/No)"] = fmt_bool(data['replacement_invoice_sent'])
+        payload["Replacement: Invoice Sent to OSG"] = fmt_bool(data['replacement_invoice_sent'])  # keep legacy col in sync
         existing_date = existing_claim.invoice_sent_osg_date if existing_claim else None
         if should_update_date('replacement_invoice_sent', existing_date):
             payload["Invoice Sent To Onsitego Date"] = today_str
 
     # Auto-date logic for: Settlement Mail to Accounts
-    if 'replacement_settlement_mail' in data: 
+    if 'replacement_settlement_mail' in data:
         payload["Settlement Mail to Accounts(Yes/No)"] = fmt_bool(data['replacement_settlement_mail'])
+        payload["Replacement: Settlement Mail to Accounts"] = fmt_bool(data['replacement_settlement_mail'])  # keep legacy col in sync
         existing_date = existing_claim.data.get("Settlement Mail to Accounts Date") if existing_claim else None
         if should_update_date('replacement_settlement_mail', existing_date):
             payload["Settlement Mail to Accounts Date"] = today_str
 
-    if 'replacement_settled_accounts' in data: 
+    if 'replacement_settled_accounts' in data:
         is_settled = data['replacement_settled_accounts']
         payload["Settled With Accounts (Yes/No)"] = fmt_bool(is_settled)
+        payload["Replacement: Settled with Accounts"] = fmt_bool(is_settled)  # keep legacy col in sync
         
         # BUSINESS RULE: If Settled with Accounts is checked, Settlement Mail to Accounts MUST be checked.
         if is_settled:
             payload["Settlement Mail to Accounts(Yes/No)"] = "Yes"
+            payload["Replacement: Settlement Mail to Accounts"] = "Yes"  # keep legacy col in sync
             
             # Only set the date if 'Settlement Mail to Accounts' was NOT ALREADY Yes
             existing_mail_checked = str(existing_claim.data.get("Settlement Mail to Accounts(Yes/No)")).strip().lower() if existing_claim else "no"
