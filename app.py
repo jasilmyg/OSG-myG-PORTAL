@@ -1364,6 +1364,23 @@ def get_claim(id):
         except Exception as e:
             print(f"Error fetching from osid_data: {e}")
 
+    # ---------------------------------------------------------------------
+    # Implicit Checkbox Logic
+    # If status progressed to "Replacement Approved", assume prior steps are done.
+    # ---------------------------------------------------------------------
+    status_val = str(found.status or "").strip().lower()
+    is_rep_approved = (status_val == "replacement approved")
+    is_rep_closed = (status_val == "replacement closed")
+    
+    rep_conf = parse_bool(found.data.get("Customer Confirmation"))
+    rep_osg_app = parse_bool(found.data.get("Approval Mail Received From Onsitego (Yes/No)"))
+    rep_mail_store = parse_bool(found.data.get("Mail Sent To Store (Yes/No)"))
+    
+    if is_rep_approved or is_rep_closed:
+        rep_conf = True
+        rep_osg_app = True
+        rep_mail_store = True
+
     return jsonify({
         "id": found.claim_id,
         "date": found.created_at.strftime('%Y-%m-%d'),
@@ -1383,9 +1400,9 @@ def get_claim(id):
         "feedback_rating": found.feedback_rating,
         
         # Replacement workflow fields (Columns O-T) - Use actual sheet column names
-        "replacement_confirmation": parse_bool(found.data.get("Customer Confirmation")),
-        "replacement_osg_approval": parse_bool(found.data.get("Approval Mail Received From Onsitego (Yes/No)")),
-        "replacement_mail_store": parse_bool(found.data.get("Mail Sent To Store (Yes/No)")),
+        "replacement_confirmation": rep_conf,
+        "replacement_osg_approval": rep_osg_app,
+        "replacement_mail_store": rep_mail_store,
         "replacement_invoice_gen": parse_bool(found.data.get("Invoice Generated (Yes/No)")),
         "replacement_invoice_sent": parse_bool(found.data.get("Invoice Sent To Onsitego (Yes/No)")),
         "settlement_mail_accounts": parse_bool(found.data.get("Settlement Mail to Accounts(Yes/No)")),
@@ -3828,8 +3845,8 @@ def request_whatsapp_report():
             'fileID': f'local_{from_date}_{to_date}',
             'status': 'completed',
             'data': {
-                'sent': stats.get('sent', 0) + stats.get('submitted', 0),
-                'delivered': stats.get('delivered', 0),
+                'sent': sum(stats.values()), # Total of all statuses = total messages triggered
+                'delivered': stats.get('delivered', 0) + stats.get('read', 0),
                 'read': stats.get('read', 0),
                 'failed': stats.get('failed', 0) + stats.get('error', 0),
                 'failed_messages': failed_messages
