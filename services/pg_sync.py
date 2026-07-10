@@ -253,7 +253,15 @@ def upsert_claim_to_postgres(claim_data: dict) -> dict:
                     if str(k).strip().lower() == "status":
                         status_key = k
                         break
-                claim_data[status_key] = "Follow Up"
+                # Only force "Follow Up" if the new status is NOT a final/terminal status.
+                # Terminal statuses should never be overridden by the auto Follow Up logic.
+                TERMINAL_STATUSES = {
+                    "repair completed", "replacement approved", "replacement closed",
+                    "rejected", "closed", "settled"
+                }
+                current_incoming_status = str(claim_data.get(status_key, "")).strip().lower()
+                if current_incoming_status not in TERMINAL_STATUSES:
+                    claim_data[status_key] = "Follow Up"
             else:
                 # If not appended, preserve 'Follow Up' status in DB if sheet tries to revert it to 'Registered'
                 if not is_new_claim:
