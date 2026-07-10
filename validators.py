@@ -50,12 +50,15 @@ ALLOWED_STATUSES = {
     "follow up",
     "repair completed",
     "replacement approved",
+    "replacement closed",
     "rejected",
+    "cancelled",
     "closed",
     "no issue/oncall resolution",
     "no issue",
     "oncall resolution",
 }
+
 
 # Allowed search types for claim-status-lookup
 ALLOWED_SEARCH_TYPES = {"mobile", "claim_id"}
