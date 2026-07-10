@@ -50,7 +50,6 @@ ALLOWED_STATUSES = {
     "follow up",
     "repair completed",
     "replacement approved",
-    "replacement closed",
     "rejected",
     "cancelled",
     "closed",
