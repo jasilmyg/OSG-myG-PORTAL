@@ -1596,7 +1596,8 @@ def update_claim(id):
     
     # Get current time in IST
     ist = pytz.timezone('Asia/Kolkata')
-    today_str = datetime.datetime.now(ist).strftime('%d-%m-%Y')
+    today_str = datetime.datetime.now(ist).strftime('%Y-%m-%d')
+
 
     def should_update_date(key_bool, existing_date_val):
         # Update date if: Checkbox is TRUE AND (Existing Date is Empty/None)
