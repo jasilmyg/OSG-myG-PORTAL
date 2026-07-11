@@ -1098,6 +1098,7 @@ function openAnalyticsModal(claimId) {
         { key: 'replacement_mail_store', label: 'Mail to Store' },
         { key: 'replacement_invoice_gen', label: 'Invoice Generated' },
         { key: 'replacement_invoice_sent', label: 'Invoice Sent to OSG' },
+        { key: 'settlement_mail_accounts', label: 'Settlement Mail to Accounts' },
         { key: 'replacement_settled_accounts', label: 'Settled with Accounts' }
     ];
 
