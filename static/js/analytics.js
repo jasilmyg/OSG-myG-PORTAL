@@ -585,10 +585,13 @@ function updateClaimsTable() {
                 <td class="issue-cell" title="${claim.issue}">${truncate(claim.issue, 40)}</td>
                 <td>${statusCellHtml}</td>
                 <td>
-                    <div class="progress-bar-container">
-                        <div class="progress-bar" style="width: ${replacementProgress}%"></div>
-                        <span class="progress-text">${replacementProgress}%</span>
-                    </div>
+                    ${replacementProgress === -1
+                        ? '<span style="color:#9ca3af;font-size:0.8rem;">—</span>'
+                        : `<div class="progress-bar-container">
+                            <div class="progress-bar" style="width: ${replacementProgress}%"></div>
+                            <span class="progress-text">${replacementProgress}%</span>
+                           </div>`
+                    }
                 </td>
                 <td>
                     ${claim.complete
@@ -961,12 +964,16 @@ function clearActiveCard() {
 
 // 🔹 UTILITY FUNCTIONS
 function calculateReplacementProgress(claim) {
+    const isReplacement = (claim.status || '').toLowerCase().includes('replacement');
+    if (!isReplacement) return -1; // not applicable
+
     const stages = [
         claim.replacement_confirmation,
         claim.replacement_osg_approval,
         claim.replacement_mail_store,
         claim.replacement_invoice_gen,
         claim.replacement_invoice_sent,
+        claim.settlement_mail_accounts,
         claim.replacement_settled_accounts
     ];
 
@@ -980,8 +987,9 @@ function getPendingReplacementStage(claim) {
     if (!claim.replacement_mail_store) return 'Mail to Store';
     if (!claim.replacement_invoice_gen) return 'Invoice Generated';
     if (!claim.replacement_invoice_sent) return 'Invoice Sent';
+    if (!claim.settlement_mail_accounts) return 'Settlement Mail to Accounts';
     if (!claim.replacement_settled_accounts) return 'Settled with Accounts';
-    return 'Unknown';
+    return 'Complete';
 }
 
 function calculateDaysOld(dateStr) {

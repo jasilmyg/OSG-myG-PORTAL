@@ -2195,14 +2195,25 @@ def get_analytics_data():
                 'claim_settled_date': claim.claim_settled_date or '',
                 'tat': tat,
                 
-                # Replacement workflow fields (Columns O-T) - Use actual sheet column names
-                'replacement_confirmation': parse_bool(claim.data.get("Customer Confirmation")),
-                'replacement_osg_approval': parse_bool(claim.data.get("Approval Mail Received From Onsitego (Yes/No)")),
-                'replacement_mail_store': parse_bool(claim.data.get("Mail Sent To Store (Yes/No)")),
-                'replacement_invoice_gen': parse_bool(claim.data.get("Invoice Generated (Yes/No)")),
-                'replacement_invoice_sent': parse_bool(claim.data.get("Invoice Sent To Onsitego (Yes/No)")),
-                'settlement_mail_accounts': parse_bool(claim.data.get("Settlement Mail to Accounts(Yes/No)")),
-                'replacement_settled_accounts': parse_bool(claim.data.get("Settled With Accounts (Yes/No)")),
+                # Replacement workflow fields — try sheet-header key first, then DB column name as fallback
+                'replacement_confirmation': parse_bool(
+                    claim.data.get("Customer Confirmation") or claim.data.get("customer_confirmation")),
+                'replacement_osg_approval': parse_bool(
+                    claim.data.get("Approval Mail Received From Onsitego (Yes/No)") or
+                    claim.data.get("approval_mail_received_from_onsitego_yes_no")),
+                'replacement_mail_store': parse_bool(
+                    claim.data.get("Mail Sent To Store (Yes/No)") or claim.data.get("mail_sent_to_store_yes_no")),
+                'replacement_invoice_gen': parse_bool(
+                    claim.data.get("Invoice Generated (Yes/No)") or claim.data.get("invoice_generated_yes_no")),
+                'replacement_invoice_sent': parse_bool(
+                    claim.data.get("Invoice Sent To Onsitego (Yes/No)") or
+                    claim.data.get("invoice_sent_to_onsitego_yes_no")),
+                'settlement_mail_accounts': parse_bool(
+                    claim.data.get("Settlement Mail to Accounts(Yes/No)") or
+                    claim.data.get("settlement_mail_to_accounts_yes_no")),
+                'replacement_settled_accounts': parse_bool(
+                    claim.data.get("Settled With Accounts (Yes/No)") or
+                    claim.data.get("settled_with_accounts_yes_no")),
                 
                 # Complete flag
                 'complete': claim.complete
