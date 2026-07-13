@@ -262,8 +262,27 @@ def upsert_claim_to_postgres(claim_data: dict) -> dict:
                 current_incoming_status = str(claim_data.get(status_key, "")).strip().lower()
                 if current_incoming_status not in TERMINAL_STATUSES:
                     claim_data[status_key] = "Follow Up"
+                    # Protect terminal/elevated statuses from being downgraded by sheet sync.
+                    # If the DB already has a terminal/elevated status but the sheet still
+                    # shows "Registered" or blank, preserve the DB status.
+                    PROTECTED_STATUSES = {
+                        "follow up",
+                        "replacement approved",
+                        "replacement closed",
+                        "repair completed",
+                        "rejected",
+                        "closed",
+                        "settled",
+                        "cancelled",
+                    }
+                    DOWNGRADE_STATUSES = {"", "registered", "submitted"}
+                    old_status = str(existing_dict.get("status") or "").strip()
+                    sheet_status = str(claim_data.get(status_key, "")).strip()
+                    if old_status.lower() in PROTECTED_STATUSES and sheet_status.lower() in DOWNGRADE_STATUSES:
+                        claim_data[status_key] = old_status  # preserve existing DB status
             else:
-                # If not appended, preserve 'Follow Up' status in DB if sheet tries to revert it to 'Registered'
+                # If not appended, protect elevated/terminal statuses from being
+                # downgraded by a Google Sheets sync that still shows "Registered".
                 if not is_new_claim:
                     old_status = str(existing_dict.get("status") or "").strip()
                     sheet_status = ""
@@ -273,8 +292,21 @@ def upsert_claim_to_postgres(claim_data: dict) -> dict:
                             sheet_status = str(v).strip()
                             status_key = k
                             break
-                    if old_status.lower() == "follow up" and sheet_status.lower() in ("", "registered"):
-                        claim_data[status_key] = "Follow Up"
+
+                    PROTECTED_STATUSES = {
+                        "follow up",
+                        "replacement approved",
+                        "replacement closed",
+                        "repair completed",
+                        "rejected",
+                        "closed",
+                        "settled",
+                        "cancelled",
+                    }
+                    DOWNGRADE_STATUSES = {"", "registered", "submitted"}
+
+                    if old_status.lower() in PROTECTED_STATUSES and sheet_status.lower() in DOWNGRADE_STATUSES:
+                        claim_data[status_key] = old_status  # preserve existing DB status
 
             # Build column→value dict for this row
             col_vals = {"claim_id": claim_id}
