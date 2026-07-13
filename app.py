@@ -1132,6 +1132,43 @@ def send_email_notification(claim_data, files=None):
         return False
 
 # ----------------------
+# LOCAL CSV BACKUP HELPER
+# ----------------------
+
+CSV_BACKUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'claims_backup.csv')
+
+def backup_claim_to_csv(claim_dict):
+    """
+    Appends a new claim to the local CSV backup file synchronously.
+    This runs BEFORE DB / Sheet / Email so data is never lost.
+    """
+    import csv
+    import threading
+    _BACKUP_LOCK = getattr(backup_claim_to_csv, '_lock', None)
+    if _BACKUP_LOCK is None:
+        backup_claim_to_csv._lock = threading.Lock()
+        _BACKUP_LOCK = backup_claim_to_csv._lock
+
+    # Canonical columns for the backup CSV
+    BACKUP_COLS = [
+        "Claim ID", "Date", "Customer Name", "Mobile Number", "Address",
+        "Product", "Model", "Serial Number", "Invoice Number", "OSID",
+        "Branch", "Issue", "Status", "Last Updated Timestamp"
+    ]
+
+    try:
+        with _BACKUP_LOCK:
+            file_exists = os.path.isfile(CSV_BACKUP_FILE)
+            with open(CSV_BACKUP_FILE, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=BACKUP_COLS, extrasaction='ignore')
+                if not file_exists:
+                    writer.writeheader()   # write headers only once
+                writer.writerow({col: claim_dict.get(col, '') for col in BACKUP_COLS})
+        logging.info(f"[BACKUP] Claim {claim_dict.get('Claim ID')} saved to {CSV_BACKUP_FILE}")
+    except Exception as e:
+        logging.error(f"[BACKUP] Failed to write CSV backup: {e}")
+
+# ----------------------
 # ROUTES
 # ----------------------
 
@@ -1251,7 +1288,12 @@ def submit_claim():
             }
 
             print(f"Syncing Claim {idx+1}/{len(claims_list)}: {new_claim['Claim ID']}")
-            sync_to_database_dict(new_claim)
+
+            # 1. LOCAL CSV BACKUP — synchronous, runs first, never fails silently
+            backup_claim_to_csv(new_claim)
+
+            # 2. DB SYNC — synchronous so failures are immediately visible
+            sync_to_database_dict(new_claim, background=False)
 
             # Push to Google Sheets in background (only basic complaint columns)
             web_app_url = os.environ.get("WEB_APP_URL")
