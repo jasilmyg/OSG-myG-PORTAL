@@ -538,6 +538,15 @@
             </div>
         </div>
 
+        <!-- Action buttons moved to top for quick access -->
+        <div style="margin-bottom: 1rem; display: flex; justify-content: flex-end; gap: 1rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 1rem;">
+            <button type="button" id="btn-notify-spare" class="btn-warning" onclick="notifySparePartsPending()" style="margin-right: auto; background-color: #f59e0b; color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-weight: 500; display: flex; align-items: center; gap: 0.5rem;">
+                <i class="ri-whatsapp-line"></i> Notify Spare Parts
+            </button>
+            <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn-primary" onclick="saveClaimChanges()">Save Changes</button>
+        </div>
+
         <div class="tabs">
             <button class="tab-btn active" id="btn-tab-info" onclick="switchTab('info')">Info</button>
             <button class="tab-btn" id="btn-tab-workflow" onclick="switchTab('workflow')">Workflow</button>
@@ -771,13 +780,7 @@
             </div>
         </div>
 
-        <div style="margin-top: 1rem; display: flex; justify-content: flex-end; gap: 1rem;">
-            <button type="button" id="btn-notify-spare" class="btn-warning" onclick="notifySparePartsPending()" style="margin-right: auto; background-color: #f59e0b; color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-weight: 500; display: flex; align-items: center; gap: 0.5rem;">
-                <i class="ri-whatsapp-line"></i> Notify Spare Parts
-            </button>
-            <button class="btn-secondary" onclick="closeModal()">Cancel</button>
-            <button class="btn-primary" onclick="saveClaimChanges()">Save Changes</button>
-        </div>
+
 
     </div>
 </template>
