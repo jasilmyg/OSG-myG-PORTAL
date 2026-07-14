@@ -79,8 +79,9 @@ SHEET_COLUMNS = [
 # Postgres-safe column name mapping  (Sheet Header → DB column name)
 def _pg_col(name: str) -> str:
     """Convert a Sheet column header to a safe PostgreSQL column name."""
+    import re
     clean_name = name.strip().lower()
-    return (
+    clean_name = (
         clean_name
         .replace(" ", "_")
         .replace("-", "_")
@@ -93,8 +94,11 @@ def _pg_col(name: str) -> str:
         .replace("'", "")
         .replace("?", "")
         .replace("!", "")
-        .strip("_")
     )
+    # Collapse multiple consecutive underscores into a single underscore
+    # This prevents "Follow Up - Dates" becoming "follow_up___dates" instead of "follow_up_dates"
+    clean_name = re.sub(r'_+', '_', clean_name)
+    return clean_name.strip("_")
 
 
 # Pre-build the column map at import time
