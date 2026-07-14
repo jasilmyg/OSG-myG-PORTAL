@@ -1834,7 +1834,7 @@ def sync_to_database_dict(payload, background=True):
         try:
             print(f"Starting Database Upsert for Claim {payload.get('Claim ID', 'Unknown')}...")
             from services.pg_sync import upsert_claim_to_postgres
-            result = upsert_claim_to_postgres(payload)
+            result = upsert_claim_to_postgres(payload, source="portal")
             if result.get("success"):
                 print(f"Upsert Status: Success")
             else:

@@ -203,12 +203,16 @@ PROTECTED_WORKFLOW_COLS = {
 # Core Insert/Update function
 # ---------------------------------------------------------------------------
 
-def upsert_claim_to_postgres(claim_data: dict) -> dict:
+def upsert_claim_to_postgres(claim_data: dict, source: str = "sheet") -> dict:
     """
     Upsert a single claim into PostgreSQL.
 
     Args:
         claim_data (dict): The claim data dictionary (keys matching sheet headers).
+        source (str): 'portal' when called from the portal UI, 'sheet' when called
+                      from the Google Sheet webhook or background poller.
+                      Portal writes stamp portal_last_updated and always win on status.
+                      Sheet writes skip status change if portal updated within 30s.
     Returns:
         dict with keys: success (bool), error (str|None)
     """
@@ -258,9 +262,14 @@ def upsert_claim_to_postgres(claim_data: dict) -> dict:
                     onsitego_key = k
                     break
                     
-            notes_val = str(claim_data.get("Follow Up - Notes") or claim_data.get("follow_up___notes") or "").strip()
+            notes_val = str(claim_data.get("Follow Up - Notes") or claim_data.get("follow_up___notes") or claim_data.get("follow_up_notes") or "").strip()
             if not notes_val and not is_new_claim:
-                notes_val = str(existing_dict.get("follow_up___notes") or "").strip()
+                # Check both old (triple-underscore) and new (single-underscore) notes columns
+                notes_val = str(
+                    existing_dict.get("follow_up_notes") or
+                    existing_dict.get("follow_up___notes") or
+                    ""
+                ).strip()
             
             if remarks_val.lower() in ('nan', 'none', 'nat'): remarks_val = ""
             if onsitego_val.lower() in ('nan', 'none', 'nat'): onsitego_val = ""
@@ -306,6 +315,33 @@ def upsert_claim_to_postgres(claim_data: dict) -> dict:
                     "no issue/oncall resolution",
                 }
                 DOWNGRADE_STATUSES = {"", "registered", "submitted"}
+
+                # Race Condition Guard (Cause 2 Fix):
+                # If this is a SHEET/POLLER write and the portal updated this claim
+                # within the last 30 seconds, unconditionally preserve the DB status.
+                # This prevents the sheet poller from overwriting a portal status
+                # change that hasn't fully committed yet (race condition).
+                GRACE_PERIOD_SECONDS = 30
+                if source == "sheet" and not is_new_claim:
+                    portal_ts_raw = existing_dict.get("portal_last_updated")
+                    if portal_ts_raw:
+                        try:
+                            if isinstance(portal_ts_raw, str):
+                                portal_ts = datetime.datetime.fromisoformat(portal_ts_raw.replace("Z", "+00:00"))
+                                # Make naive for comparison
+                                portal_ts = portal_ts.replace(tzinfo=None)
+                            else:
+                                portal_ts = portal_ts_raw.replace(tzinfo=None)
+                            seconds_since_portal = (datetime.datetime.utcnow() - portal_ts).total_seconds()
+                            if seconds_since_portal < GRACE_PERIOD_SECONDS:
+                                claim_data[status_key] = old_db_status
+                                logger.info(
+                                    f"[PG_SYNC] Race condition guard triggered for {claim_id}: "
+                                    f"portal updated {seconds_since_portal:.1f}s ago — preserving "
+                                    f"DB status '{old_db_status}' over sheet source."
+                                )
+                        except Exception as ts_err:
+                            logger.warning(f"[PG_SYNC] Could not parse portal_last_updated for {claim_id}: {ts_err}")
 
                 # Rule 1: If the DB already holds a protected/elevated status,
                 #         NEVER downgrade it — regardless of what the Sheet says.
@@ -371,6 +407,11 @@ def upsert_claim_to_postgres(claim_data: dict) -> dict:
 
             # Always stamp the sync time
             col_vals["synced_at"] = datetime.datetime.utcnow().isoformat()
+
+            # Portal writes stamp portal_last_updated so the race condition guard
+            # can detect when the sheet poller fires too soon after a portal save.
+            if source == "portal":
+                col_vals["portal_last_updated"] = datetime.datetime.utcnow().isoformat()
 
             cols = list(col_vals.keys())
             vals = [col_vals[c] for c in cols]
