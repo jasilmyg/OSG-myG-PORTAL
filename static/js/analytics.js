@@ -1040,10 +1040,15 @@ function refreshDashboard() {
 
 async function exportTableData() {
     // Build list of claim IDs to export
-    const claimIds = filteredClaims.map(c => c.claim_id);
+    const claimIds = filteredClaims.map(c => c.claim_id).filter(Boolean);
 
+    if (claimIds.length === 0) {
+        alert('No claims to export. Please wait for data to load.');
+        return;
+    }
+
+    const btn = document.querySelector('.btn-export');
     try {
-        const btn = document.querySelector('.btn-export');
         if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ri-loader-4-line"></i> Exporting...'; }
 
         const response = await fetch('/api/export-claims-excel', {
@@ -1052,7 +1057,15 @@ async function exportTableData() {
             body: JSON.stringify({ claim_ids: claimIds })
         });
 
-        if (!response.ok) throw new Error('Export failed');
+        if (!response.ok) {
+            // Try to read the real error from server
+            let errMsg = `Export failed (HTTP ${response.status})`;
+            try {
+                const errData = await response.json();
+                if (errData && errData.error) errMsg = errData.error;
+            } catch (_) {}
+            throw new Error(errMsg);
+        }
 
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
@@ -1065,9 +1078,8 @@ async function exportTableData() {
         URL.revokeObjectURL(url);
     } catch (err) {
         console.error('Export error:', err);
-        alert('Export failed. Please try again.');
+        alert('Export failed: ' + err.message);
     } finally {
-        const btn = document.querySelector('.btn-export');
         if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ri-download-line"></i> Export'; }
     }
 }
