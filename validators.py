@@ -27,7 +27,7 @@ MAX_TEXT_LONG      = 2000   # address, notes, remarks …
 MAX_FILE_SIZE_MB   = 10     # 10 MB hard limit per uploaded file
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 MAX_CLAIMS_PER_SUBMIT = 10  # maximum claim items in one submission
-MAX_EXPORT_IDS     = 500    # max claim IDs in one export request
+MAX_EXPORT_IDS     = 2000   # max claim IDs in one export request
 
 # Allowed file extensions and their corresponding magic-byte signatures
 ALLOWED_EXTENSIONS = {'.xlsx', '.xls', '.pdf', '.jpg', '.jpeg', '.png'}
