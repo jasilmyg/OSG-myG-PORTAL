@@ -98,8 +98,8 @@ function updateKPIs() {
     });
     document.getElementById('kpi-replacement').textContent = replacementPending.length;
 
-    // Repair Completed
-    const repairCompleted = claims.filter(c => c.status === 'Repair Completed');
+    // Repair Completed (case-insensitive to handle any DB inconsistency)
+    const repairCompleted = claims.filter(c => (c.status || '').toLowerCase() === 'repair completed');
     const kpiRepairEl = document.getElementById('kpi-repair-completed');
     if (kpiRepairEl) kpiRepairEl.textContent = repairCompleted.length;
 
@@ -164,12 +164,19 @@ function updateKPIs() {
 function updateStatusChart() {
     const ctx = document.getElementById('statusChart');
 
-    // Count claims by status
+    // Count claims by status (normalize case to avoid duplicate chart slices)
     const statusCounts = {};
     filteredClaims.forEach(claim => {
         let status = claim.status || 'Unknown';
-        // Normalize status
-        if (status.includes('Replacement')) status = 'Replacement';
+        // Normalize case: convert known statuses to consistent title case
+        const sl = status.toLowerCase();
+        if (sl === 'repair completed') status = 'Repair Completed';
+        else if (sl === 'rejected') status = 'Rejected';
+        else if (sl === 'registered') status = 'Registered';
+        else if (sl === 'cancelled') status = 'Cancelled';
+        else if (sl === 'follow up') status = 'Follow Up';
+        else if (sl.includes('replacement')) status = 'Replacement';
+        else if (sl.includes('no issue') || sl.includes('oncall')) status = 'No Issue/Resolved';
         statusCounts[status] = (statusCounts[status] || 0) + 1;
     });
 
@@ -905,7 +912,7 @@ function filterByCard(cardType) {
             });
             break;
         case 'repair-completed':
-            filteredClaims = allClaims.filter(c => c.status === 'Repair Completed');
+            filteredClaims = allClaims.filter(c => (c.status || '').toLowerCase() === 'repair completed');
             break;
         case 'settled':
             filteredClaims = allClaims.filter(c => {

@@ -164,6 +164,38 @@ def _add_missing_columns(conn, sheet_row_keys: list):
 
 
 # ---------------------------------------------------------------------------
+# Workflow columns that must never be overwritten with NULL by a Google Sheets
+# sync.  The portal sets these via the Edit-Claim form; if the Sheet doesn't
+# carry them (NULL incoming), we keep whatever value is already in the DB.
+# ---------------------------------------------------------------------------
+PROTECTED_WORKFLOW_COLS = {
+    # New-style column names (portal saves here)
+    "customer_confirmation",
+    "approval_mail_received_from_onsitego_yes_no",
+    "mail_sent_to_store_yes_no",
+    "invoice_generated_yes_no",
+    "invoice_sent_to_onsitego_yes_no",
+    "settlement_mail_to_accounts_yes_no",
+    "settled_with_accounts_yes_no",
+    "complete_yes_no",
+    # Old-style column names (legacy Sheet columns)
+    "replacement_confirmation_pending",
+    "replacement_osg_approval",
+    "replacement_mail_to_store",
+    "replacement_invoice_generated",
+    "replacement_invoice_sent_to_osg",
+    "replacement_settled_with_accounts",
+    "replacement_settlement_mail_to_accounts",
+    # Dates for workflow steps
+    "approval_mail_received_date",
+    "mail_sent_to_store_date",
+    "invoice_generated_date",
+    "invoice_sent_to_onsitego_date",
+    # Completion flag
+    "complete",
+}
+
+# ---------------------------------------------------------------------------
 # Core Insert/Update function
 # ---------------------------------------------------------------------------
 
@@ -253,33 +285,40 @@ def upsert_claim_to_postgres(claim_data: dict) -> dict:
                     if str(k).strip().lower() == "status":
                         status_key = k
                         break
-                # Only force "Follow Up" if the new status is NOT a final/terminal status.
-                # Terminal statuses should never be overridden by the auto Follow Up logic.
+
+                # Capture the ORIGINAL incoming sheet status BEFORE any mutation.
+                # (Reading it after the force-to-Follow-Up would give "Follow Up",
+                # making the protection check below useless — that was the old bug.)
+                original_sheet_status = str(claim_data.get(status_key, "")).strip()
+                old_db_status = str(existing_dict.get("status") or "").strip()
+
                 TERMINAL_STATUSES = {
                     "repair completed", "replacement approved", "replacement closed",
-                    "rejected", "closed", "settled"
+                    "rejected", "closed", "settled", "cancelled", "no issue/oncall resolution",
                 }
-                current_incoming_status = str(claim_data.get(status_key, "")).strip().lower()
-                if current_incoming_status not in TERMINAL_STATUSES:
+                PROTECTED_STATUSES = {
+                    "follow up", "replacement approved", "replacement closed",
+                    "repair completed", "rejected", "closed", "settled", "cancelled",
+                    "no issue/oncall resolution",
+                }
+                DOWNGRADE_STATUSES = {"", "registered", "submitted"}
+
+                # Rule 1: If the DB already holds a protected/elevated status,
+                #         NEVER downgrade it — regardless of what the Sheet says.
+                #         Just log the remark/onsitego note and leave the status alone.
+                if old_db_status.lower() in PROTECTED_STATUSES:
+                    claim_data[status_key] = old_db_status  # preserve DB status
+                    logger.info(
+                        f"[PG_SYNC] Status protected for {claim_id}: "
+                        f"DB='{old_db_status}' | Sheet='{original_sheet_status}' "
+                        f"→ keeping DB status (append triggered Follow-Up guard)"
+                    )
+
+                # Rule 2: Only force "Follow Up" if the incoming sheet status is NOT
+                #         terminal AND the DB status is also not protected.
+                elif original_sheet_status.lower() not in TERMINAL_STATUSES:
                     claim_data[status_key] = "Follow Up"
-                    # Protect terminal/elevated statuses from being downgraded by sheet sync.
-                    # If the DB already has a terminal/elevated status but the sheet still
-                    # shows "Registered" or blank, preserve the DB status.
-                    PROTECTED_STATUSES = {
-                        "follow up",
-                        "replacement approved",
-                        "replacement closed",
-                        "repair completed",
-                        "rejected",
-                        "closed",
-                        "settled",
-                        "cancelled",
-                    }
-                    DOWNGRADE_STATUSES = {"", "registered", "submitted"}
-                    old_status = str(existing_dict.get("status") or "").strip()
-                    sheet_status = str(claim_data.get(status_key, "")).strip()
-                    if old_status.lower() in PROTECTED_STATUSES and sheet_status.lower() in DOWNGRADE_STATUSES:
-                        claim_data[status_key] = old_status  # preserve existing DB status
+
             else:
                 # If not appended, protect elevated/terminal statuses from being
                 # downgraded by a Google Sheets sync that still shows "Registered".
@@ -333,12 +372,28 @@ def upsert_claim_to_postgres(claim_data: dict) -> dict:
             vals = [col_vals[c] for c in cols]
 
             # Build the upsert (INSERT … ON CONFLICT … DO UPDATE SET …)
+            # For PROTECTED_WORKFLOW_COLS: use COALESCE so that a NULL from the
+            # Sheet never overwrites a value the portal already saved.
+            # For all other columns: normal EXCLUDED.col replacement.
             insert_cols = sql.SQL(", ").join(sql.Identifier(c) for c in cols)
             placeholders = sql.SQL(", ").join(sql.Placeholder() * len(cols))
-            update_set = sql.SQL(", ").join(
-                sql.SQL("{} = EXCLUDED.{}").format(sql.Identifier(c), sql.Identifier(c))
-                for c in cols if c not in ["claim_id", "date", "submitted_date"]
-            )
+
+            update_parts = []
+            for c in cols:
+                if c in ["claim_id", "date", "submitted_date"]:
+                    continue  # never overwrite these
+                if c in PROTECTED_WORKFLOW_COLS:
+                    # COALESCE: keep existing value if incoming is NULL
+                    update_parts.append(
+                        sql.SQL("{col} = COALESCE(EXCLUDED.{col}, claims.{col})").format(
+                            col=sql.Identifier(c)
+                        )
+                    )
+                else:
+                    update_parts.append(
+                        sql.SQL("{col} = EXCLUDED.{col}").format(col=sql.Identifier(c))
+                    )
+            update_set = sql.SQL(", ").join(update_parts)
 
             upsert_query = sql.SQL(
                 "INSERT INTO claims ({cols}) VALUES ({vals}) "
