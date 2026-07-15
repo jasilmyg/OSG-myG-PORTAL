@@ -24,7 +24,7 @@ from typing import List
 MAX_TEXT_DEFAULT   = 500    # characters
 MAX_TEXT_SHORT     = 100    # username, staff name, sr_no …
 MAX_TEXT_LONG      = 2000   # address, notes, remarks …
-MAX_FILE_SIZE_MB   = 50     # 50 MB hard limit per uploaded file (increased from 10 MB for large monthly Excel reports)
+MAX_FILE_SIZE_MB   = 500    # 500 MB hard limit per uploaded file
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 MAX_CLAIMS_PER_SUBMIT = 10  # maximum claim items in one submission
 MAX_EXPORT_IDS     = 2000   # max claim IDs in one export request
