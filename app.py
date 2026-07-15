@@ -732,7 +732,8 @@ def dashboard():
 
         # REPLACEMENT column logic — waterfall: place claim at its CURRENT highest completed step
         # Aging buckets use claim_settled_date-based age (repl_age)
-        if is_replacement_claim or c.mail_sent_to_store:
+        # Exclude cancelled/rejected even if mail_sent_to_store=True (old workflow flag not cleared)
+        if (is_replacement_claim or c.mail_sent_to_store) and status not in ('cancelled', 'rejected'):
             if c.settled_with_accounts:
                 report_stats['settled_accounts'] += 1
                 report_stats['grand_total_replacement'] += 1
@@ -858,7 +859,8 @@ def download_report():
             else:
                 report_stats['pending']['gt10'] += 1
 
-        if is_replacement_claim or c.mail_sent_to_store:
+        # Exclude cancelled/rejected even if mail_sent_to_store=True (old workflow flag not cleared)
+        if (is_replacement_claim or c.mail_sent_to_store) and status not in ('cancelled', 'rejected'):
             if c.settled_with_accounts:
                 report_stats['settled_accounts'] += 1
                 report_stats['grand_total_replacement'] += 1
@@ -1932,7 +1934,7 @@ def debug_gst_claims():
         for c in claims:
             if c.invoice_generated:
                 status = (c.status or '').strip().lower()
-                if 'replacement' in status or c.mail_sent_to_store:
+                if ('replacement' in status or c.mail_sent_to_store) and status not in ('cancelled', 'rejected'):
                     if not c.invoice_sent_osg and not c.settlement_mail_accounts and not c.settled_with_accounts:
                         age = (now - c.created_at.replace(tzinfo=None)).days if c.created_at else 0
                         gst_claims.append({
@@ -2024,7 +2026,7 @@ def claim_status():
             else:
                 report_stats['pending']['gt10'] += 1
 
-        if "replacement" in status or c.mail_sent_to_store:
+        if ("replacement" in status or c.mail_sent_to_store) and status not in ('cancelled', 'rejected'):
             if c.settled_with_accounts:
                 report_stats['settled_accounts'] += 1
                 report_stats['grand_total_replacement'] += 1
