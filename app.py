@@ -67,9 +67,9 @@ SENDER_EMAIL = "sarath.k@myg.in"
 SENDER_PASSWORD = os.environ.get('SENDER_PASSWORD')
 
 # WhatsApp Notification Cutoff
-# WhatsApp messages are currently DISABLED. To re-enable, change this to your desired cutoff date.
 # Claims registered BEFORE this date will NOT receive WhatsApp notifications.
-WHATSAPP_CUTOFF_DATE = datetime.datetime(2099, 1, 1)
+# Set to 2026-07-09 to enable WA for all claims from 09-Jul-2026 onwards.
+WHATSAPP_CUTOFF_DATE = datetime.datetime(2026, 7, 9)
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -1539,101 +1539,81 @@ def update_claim(id):
     existing_claim = next((c for c in all_claims if str(c.claim_id) == str(id)), None)
     
     # --- WHATSAPP NOTIFICATION LOGIC ---
+    # Notifiable statuses and their templates (per spec)
+    WA_TEMPLATES = {
+        "REGISTERED":            ("myg_onsitego_registered_main",       lambda n, mo, sr: [n, mo, sr]),
+        "REPAIR COMPLETED":      ("myg_onsitego_repair_completed_main",  lambda n, mo, sr: [n, sr]),
+        "REPLACEMENT APPROVED":  ("myg_onsitego_replacement_main",       lambda n, mo, sr: [n, mo]),
+        "REJECTED":              ("osg_clm_reject",                      lambda n, mo, sr: [n]),
+    }
+
     if 'status' in data:
-        new_status = data['status'].strip().upper()
-        existing_status = (existing_claim.status or "").strip().upper() if existing_claim else ""
-        last_notified_status = (existing_claim.data.get("Last_Notified_Status") or "").strip().upper() if existing_claim else ""
-        
-        # Helper to check boolean fields for Replacement Workflow
-        def is_checked(bool_key, db_key):
-            if bool_key in data:
-                return data[bool_key]
-            if existing_claim and existing_claim.data:
-                val = existing_claim.data.get(db_key)
-                if val is not None and str(val).strip() != '':
-                    return str(val).strip().lower() in ['yes', 'true', '1']
-            return False
+        new_status_raw  = data['status'].strip()
+        new_status_up   = new_status_raw.upper()
+        last_notif_up   = ((existing_claim.data.get("Last_Notified_Status") if existing_claim and existing_claim.data else None) or "").strip().upper()
 
-        repl_confirmed = is_checked('replacement_confirmation', 'Customer Confirmation')
-        repl_osg = is_checked('replacement_osg_approval', 'Approval Mail Received From Onsitego (Yes/No)')
-        repl_mail = is_checked('replacement_mail_store', 'Mail Sent To Store (Yes/No)')
+        # Rule: only send if status is notifiable AND not already notified for this status
+        if new_status_up in WA_TEMPLATES and new_status_up != last_notif_up:
 
-        should_notify = False
-        
-        if new_status != existing_status and new_status != last_notified_status:
-            if new_status in ["REGISTERED", "REPAIR COMPLETED", "REJECTED"]:
-                should_notify = True
-                
-        if new_status == "REPLACEMENT APPROVED" and last_notified_status != "REPLACEMENT APPROVED":
-            if repl_confirmed and repl_osg and repl_mail:
-                should_notify = True
-
-        if should_notify:
-                # --- CUTOFF DATE GATE ---
-                # Block notifications for claims registered before the cutoff date
-                claim_registered_date = existing_claim.created_at if existing_claim else None
-                if claim_registered_date:
-                    # Strip timezone info for comparison if present
-                    reg_date_naive = claim_registered_date.replace(tzinfo=None)
-                    if reg_date_naive < WHATSAPP_CUTOFF_DATE:
-                        logging.info(
-                            f"[WHATSAPP_BLOCKED] Claim {id} registered on "
-                            f"{reg_date_naive.strftime('%Y-%m-%d')} is before cutoff "
-                            f"{WHATSAPP_CUTOFF_DATE.strftime('%Y-%m-%d')}. Skipping notification."
-                        )
-                    else:
-                        # Registration date is on or after the cutoff — send message
-                        from services.whatsapp_service import send_whatsapp_message
-                        mobile = str(existing_claim.mobile_no) if existing_claim and existing_claim.mobile_no else data.get('mobile', '')
-                        c_name = (existing_claim.customer_name if existing_claim and existing_claim.customer_name else data.get('customer_name', '')).strip()
-                        if not c_name: c_name = "Customer"
-                        
-                        c_model = (existing_claim.model if existing_claim and existing_claim.model else data.get('model', '')).strip()
-                        if not c_model: c_model = "your product"
-                        
-                        c_sr_no = (existing_claim.sr_no if existing_claim and existing_claim.sr_no else data.get('sr_no', '')).strip()
-                        if not c_sr_no:
-                            c_sr_no = id  # Fallback to Claim ID (e.g. CLM-123) if SR No is missing
-
-                        if new_status == "REPAIR COMPLETED":
-                            template_to_use = "myg_onsitego_repair_completed_main"
-                            template_params = [c_name, c_sr_no]
-                        elif new_status == "REPLACEMENT APPROVED":
-                            template_to_use = "myg_onsitego_replacement_main"
-                            template_params = [c_name, c_model]
-                        elif new_status == "REJECTED":
-                            template_to_use = "osg_clm_reject"
-                            template_params = [c_name]
-                        else:
-                            template_to_use = "myg_onsitego_registered_main"
-                            template_params = [c_name, c_model, c_sr_no]
-
-                        resp = send_whatsapp_message(
-                            mobile=mobile,
-                            template_name=template_to_use,
-                            params=template_params
-                        )
-                        print(f"WhatsApp Trigger Response ({new_status}):", resp)
-                        
-                        # DEBUG LOGGING FOR WHATSAPP
-                        try:
-                            with open("whatsapp_debug_log.txt", "a") as f:
-                                f.write(f"--- WHATSAPP TRIGGER ---\n")
-                                f.write(f"Status: {new_status}\n")
-                                f.write(f"Template: {template_to_use}\n")
-                                f.write(f"Params: {template_params}\n")
-                                f.write(f"Response: {resp}\n\n")
-                        except Exception:
-                            pass
-                        
-                        # Only update Last_Notified_Status if message was successfully sent (not blocked and API returned 2xx)
-                        if not resp.get("blocked") and resp.get("status_code") in [200, 201, 202]:
-                            payload["Last_Notified_Status"] = new_status
+            # Cutoff gate: claim must be registered on or after WHATSAPP_CUTOFF_DATE
+            claim_registered_date = existing_claim.created_at if existing_claim else None
+            can_send = False
+            if claim_registered_date:
+                reg_date_naive = claim_registered_date.replace(tzinfo=None)
+                if reg_date_naive >= WHATSAPP_CUTOFF_DATE:
+                    can_send = True
                 else:
-                    logging.warning(f"[WHATSAPP_BLOCKED] Claim {id} has no registration date. Skipping notification.")
-                # --- END CUTOFF DATE GATE ---
+                    logging.info(
+                        f"[WA_BLOCKED] {id} registered {reg_date_naive.date()} "
+                        f"< cutoff {WHATSAPP_CUTOFF_DATE.date()}. Skipping."
+                    )
+            else:
+                logging.warning(f"[WA_BLOCKED] {id} has no registration date. Skipping.")
 
-    # ------------------------------------
+            if can_send:
+                from services.whatsapp_service import send_whatsapp_message
+
+                # Build params
+                mobile   = str(existing_claim.mobile_no or data.get('mobile', '')).strip()
+                if '.' in mobile: mobile = mobile.split('.')[0]  # strip .0 from floats
+
+                c_name   = (existing_claim.customer_name if existing_claim and existing_claim.customer_name else data.get('customer_name', '')).strip() or "Customer"
+                c_model  = (existing_claim.model if existing_claim and existing_claim.model else data.get('model', '')).strip() or "your product"
+                c_sr_no  = (existing_claim.sr_no if existing_claim and existing_claim.sr_no else data.get('sr_no', '')).strip() or id
+
+                # Validate mobile
+                if not mobile or len(mobile.replace('+', '').replace(' ', '')) < 10:
+                    logging.warning(f"[WA_SKIP] {id} — invalid/empty mobile '{mobile}'. Skipping.")
+                else:
+                    template_name, param_fn = WA_TEMPLATES[new_status_up]
+                    template_params = param_fn(c_name, c_model, c_sr_no)
+
+                    logging.info(f"[WA_SEND] {id} | status={new_status_up} | mobile={mobile} | template={template_name}")
+                    resp = send_whatsapp_message(
+                        mobile=mobile,
+                        template_name=template_name,
+                        params=template_params
+                    )
+                    logging.info(f"[WA_RESP] {id} | {resp}")
+
+                    # Debug log
+                    try:
+                        with open("whatsapp_debug_log.txt", "a") as f:
+                            f.write(f"--- WA TRIGGER ---\n")
+                            f.write(f"ClaimID : {id}\n")
+                            f.write(f"Status  : {new_status_up}\n")
+                            f.write(f"Template: {template_name}\n")
+                            f.write(f"Params  : {template_params}\n")
+                            f.write(f"Mobile  : {mobile}\n")
+                            f.write(f"Response: {resp}\n\n")
+                    except Exception:
+                        pass
+
+                    # Update Last_Notified_Status + Last_Notified_At ONLY on success
+                    if not resp.get("blocked") and resp.get("status_code") in [200, 201, 202]:
+                        payload["Last_Notified_Status"] = new_status_raw
+                        payload["Last_Notified_At"]     = datetime.datetime.utcnow().isoformat()
+    # --- END WHATSAPP NOTIFICATION LOGIC ---
 
     import datetime
     import pytz
