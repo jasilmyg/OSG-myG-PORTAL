@@ -68,7 +68,9 @@ function updateKPIs() {
         const s = (c.status || '').toLowerCase();
 
         // Exclude definitively closed/resolved statuses
-        if (s === 'settled' || s === 'closed' || s === 'repair completed' || s === 'rejected' || s.includes('no issue')) return false;
+        if (s === 'settled' || s === 'closed' || s === 'repair completed' ||
+            s === 'rejected' || s === 'cancelled' || s.includes('no issue') ||
+            s.includes('replacement closed')) return false;
 
         // For Replacement Approved, it's only "closed" if the workflow is complete
         if (s.includes('replacement') && s.includes('approved')) {
