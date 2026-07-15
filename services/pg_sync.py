@@ -224,7 +224,8 @@ def upsert_claim_to_postgres(claim_data: dict, source: str = "sheet") -> dict:
 
     try:
         ensure_table_exists(conn)
-        _add_missing_columns(conn, list(claim_data.keys()))
+        # Ensure portal_last_updated sentinel column exists before the INSERT uses it
+        _add_missing_columns(conn, list(claim_data.keys()) + ["portal_last_updated", "synced_at"])
 
         with conn.cursor() as cur:
             claim_id = str(claim_data.get("Claim ID") or claim_data.get("claim_id") or "").strip()

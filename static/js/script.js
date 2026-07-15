@@ -740,7 +740,14 @@ async function saveClaimChanges() {
             alert("Failed to update: " + (d.message || "Unknown error"));
         }
     } catch (e) {
-        alert("Error updating");
+        console.error("Save error:", e);
+        try {
+            // Try to extract the server's error message from the response
+            const errText = e && e.message ? e.message : String(e);
+            alert("Error updating. Please try again.\nDetails: " + errText);
+        } catch (_) {
+            alert("Error updating. Please try again.");
+        }
     }
 }
 

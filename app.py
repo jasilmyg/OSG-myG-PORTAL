@@ -124,7 +124,12 @@ def ratelimit_handler(e):
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    logging.error(f"[SYSTEM_ERROR] Exception on {request.path} from IP {get_remote_address()}: {str(e)}", exc_info=True)
+    import traceback
+    tb = traceback.format_exc()
+    logging.error(f"[SYSTEM_ERROR] Exception on {request.path} from IP {get_remote_address()}: {str(e)}\n{tb}")
+    # Return JSON for API/AJAX requests so the JS can show the actual error
+    if request.is_json or request.path.startswith('/update-claim') or request.path.startswith('/api'):
+        return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
     return "Internal Server Error", 500
 
 # ----------------------
@@ -1562,48 +1567,51 @@ def update_claim(id):
         not_already_notified = (new_status_up != last_notif_up)
 
         if status_is_notifiable and status_actually_changed and not_already_notified:
-            from services.whatsapp_service import send_whatsapp_message
+            try:
+                from services.whatsapp_service import send_whatsapp_message
 
-            # Build params
-            mobile  = str(existing_claim.mobile_no or data.get('mobile', '')).strip() if existing_claim else data.get('mobile', '')
-            if '.' in mobile: mobile = mobile.split('.')[0]  # strip .0 from float mobile numbers
+                # Build params
+                mobile  = str(existing_claim.mobile_no or data.get('mobile', '')).strip() if existing_claim else data.get('mobile', '')
+                if '.' in mobile: mobile = mobile.split('.')[0]  # strip .0 from float mobile numbers
 
-            c_name  = (existing_claim.customer_name if existing_claim and existing_claim.customer_name else data.get('customer_name', '')).strip() or "Customer"
-            c_model = (existing_claim.model if existing_claim and existing_claim.model else data.get('model', '')).strip() or "your product"
-            c_sr_no = (existing_claim.sr_no if existing_claim and existing_claim.sr_no else data.get('sr_no', '')).strip() or id
+                c_name  = (existing_claim.customer_name if existing_claim and existing_claim.customer_name else data.get('customer_name', '')).strip() or "Customer"
+                c_model = (existing_claim.model if existing_claim and existing_claim.model else data.get('model', '')).strip() or "your product"
+                c_sr_no = (existing_claim.sr_no if existing_claim and existing_claim.sr_no else data.get('sr_no', '')).strip() or id
 
-            # Validate mobile
-            if not mobile or len(mobile.replace('+', '').replace(' ', '')) < 10:
-                logging.warning(f"[WA_SKIP] {id} — invalid/empty mobile '{mobile}'. Skipping.")
-            else:
-                template_name, param_fn = WA_TEMPLATES[new_status_up]
-                template_params = param_fn(c_name, c_model, c_sr_no)
+                # Validate mobile
+                if not mobile or len(mobile.replace('+', '').replace(' ', '')) < 10:
+                    logging.warning(f"[WA_SKIP] {id} — invalid/empty mobile '{mobile}'. Skipping.")
+                else:
+                    template_name, param_fn = WA_TEMPLATES[new_status_up]
+                    template_params = param_fn(c_name, c_model, c_sr_no)
 
-                logging.info(f"[WA_SEND] {id} | {existing_status_up} -> {new_status_up} | mobile={mobile} | template={template_name}")
-                resp = send_whatsapp_message(
-                    mobile=mobile,
-                    template_name=template_name,
-                    params=template_params
-                )
-                logging.info(f"[WA_RESP] {id} | {resp}")
+                    logging.info(f"[WA_SEND] {id} | {existing_status_up} -> {new_status_up} | mobile={mobile} | template={template_name}")
+                    resp = send_whatsapp_message(
+                        mobile=mobile,
+                        template_name=template_name,
+                        params=template_params
+                    )
+                    logging.info(f"[WA_RESP] {id} | {resp}")
 
-                # Audit log
-                try:
-                    with open("whatsapp_debug_log.txt", "a") as f:
-                        f.write(f"--- WA TRIGGER ---\n")
-                        f.write(f"ClaimID  : {id}\n")
-                        f.write(f"Change   : {existing_status_up} -> {new_status_up}\n")
-                        f.write(f"Template : {template_name}\n")
-                        f.write(f"Params   : {template_params}\n")
-                        f.write(f"Mobile   : {mobile}\n")
-                        f.write(f"Response : {resp}\n\n")
-                except Exception:
-                    pass
+                    # Audit log
+                    try:
+                        with open("whatsapp_debug_log.txt", "a") as f:
+                            f.write(f"--- WA TRIGGER ---\n")
+                            f.write(f"ClaimID  : {id}\n")
+                            f.write(f"Change   : {existing_status_up} -> {new_status_up}\n")
+                            f.write(f"Template : {template_name}\n")
+                            f.write(f"Params   : {template_params}\n")
+                            f.write(f"Mobile   : {mobile}\n")
+                            f.write(f"Response : {resp}\n\n")
+                    except Exception:
+                        pass
 
-                # Stamp Last_Notified_Status + Last_Notified_At only on API success
-                if not resp.get("blocked") and resp.get("status_code") in [200, 201, 202]:
-                    payload["Last_Notified_Status"] = new_status_raw
-                    payload["Last_Notified_At"]     = datetime.datetime.utcnow().isoformat()
+                    # Stamp Last_Notified_Status + Last_Notified_At only on API success
+                    if not resp.get("blocked") and resp.get("status_code") in [200, 201, 202]:
+                        payload["Last_Notified_Status"] = new_status_raw
+                        payload["Last_Notified_At"]     = datetime.datetime.utcnow().isoformat()
+            except Exception as wa_err:
+                logging.error(f"[WA_ERROR] {id} — WhatsApp notification failed: {wa_err}", exc_info=True)
         else:
             if status_is_notifiable and not status_actually_changed:
                 logging.info(f"[WA_SKIP] {id} — status unchanged ({existing_status_up}). No message.")
@@ -1712,8 +1720,9 @@ def update_claim(id):
     try:
         sync_to_database_dict(payload, background=False)
     except Exception as e:
-        print(f"Update Sync Error: {e}")
-        return jsonify({"success": False})
+        import traceback
+        logging.error(f"[UPDATE_CLAIM] Sync error for {id}: {e}\n{traceback.format_exc()}")
+        return jsonify({"success": False, "message": f"Database sync failed: {str(e)}"})
 
     # --- GOOGLE SHEET WEBHOOK UPDATE ---
     web_app_url = os.environ.get("WEB_APP_URL")
