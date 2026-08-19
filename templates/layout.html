@@ -96,6 +96,8 @@
                 </div>
             </div>
 
+
+
             <div class="user-profile">
                 <div class="user-avatar">{{ session.get('display_name', session.get('username', 'U'))[:2]|upper }}</div>
                 <div class="user-info">
@@ -120,6 +122,24 @@
             <div id="modal-body"></div>
         </div>
     </div>
+
+    {% if session.get('role') == 'customercare' %}
+    <script>
+        (function() {
+          const script = document.createElement('script');
+          script.src = 'https://webchat.cloodot.com/embed-script.js';
+          script.onload = function() {
+            const webchat = CloodotWebchat.init({
+              channelId: "cmswsimq60001psp74ehjr98a",
+              position: "bottom-right",
+              companyName: "myG",
+              primaryColor: "#18181B"
+            });
+          };
+          document.head.appendChild(script);
+        })();
+    </script>
+    {% endif %}
 
     <script src="{{ url_for('static', filename='js/script.js') }}?v=3"></script>
 </body>
